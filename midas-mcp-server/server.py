@@ -6,7 +6,7 @@ Provides depth estimation and portion size calculation endpoints
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional
 import torch
 import cv2
 import numpy as np
@@ -69,8 +69,10 @@ def load_midas_model():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {device}")
         
-        # Load MiDaS model (using DPT_Large for best accuracy)
-        midas_model = torch.hub.load("intel-isl/MiDaS", "DPT_Large")
+        # Use a smaller, faster model for Railway deployment
+        # DPT_Hybrid is smaller and faster than DPT_Large
+        logger.info("Loading DPT_Hybrid model (optimized for deployment)...")
+        midas_model = torch.hub.load("intel-isl/MiDaS", "DPT_Hybrid")
         midas_model.to(device)
         midas_model.eval()
         
@@ -82,24 +84,42 @@ def load_midas_model():
         return True
     except Exception as e:
         logger.error(f"Failed to load MiDaS model: {str(e)}")
+        logger.error("Server will start but model-dependent endpoints will be unavailable")
         return False
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize model on server startup"""
+    logger.info("Starting model loading process...")
     success = load_midas_model()
     if not success:
         logger.warning("Server started but MiDaS model failed to load")
+        logger.warning("Model-dependent endpoints will return 503 errors")
+    else:
+        logger.info("Model loading completed successfully")
 
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Root endpoint"""
     return {
         "service": "MiDaS MCP Server",
         "status": "running",
         "model_loaded": midas_model is not None
+    }
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness check - only returns healthy when model is loaded"""
+    if midas_model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
+    
+    return {
+        "status": "ready",
+        "model_loaded": True,
+        "device": str(device) if device else "not initialized"
     }
 
 
@@ -223,12 +243,16 @@ async def estimate_portion(
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check"""
+    """Health check endpoint for Railway deployment"""
+    # Always return healthy status for basic healthcheck
+    # Railway just needs to know the service is responding
+    # The model can load in the background
     return {
         "status": "healthy",
+        "service": "MiDaS MCP Server",
         "model_loaded": midas_model is not None,
         "device": str(device) if device else "not initialized",
-        "endpoints": ["/estimate_depth", "/estimate_portion"]
+        "message": "Service is running" + (" (model ready)" if midas_model else " (model loading...)")
     }
 
 

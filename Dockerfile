@@ -8,6 +8,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     git \
     libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first
@@ -19,8 +24,15 @@ RUN pip install --upgrade pip && pip install -r ./midas-mcp-server/requirements-
 # Copy app code
 COPY midas-mcp-server/ ./midas-mcp-server/
 
+# Set environment variables for better performance
+ENV PYTHONUNBUFFERED=1
+ENV TORCH_HOME=/tmp/torch_cache
+
 # Expose port (Railway sets $PORT)
 EXPOSE 8000
 
-# Start server (use $PORT if set)
-CMD ["sh", "-c", "uvicorn midas-mcp-server.server:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Copy startup script
+COPY start_server.py ./
+
+# Start server with optimized settings
+CMD ["python", "start_server.py"]
