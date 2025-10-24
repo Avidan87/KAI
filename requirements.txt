@@ -1,0 +1,13 @@
+requests
+python-dotenv
+openai>=1.40.0
+fastapi
+uvicorn[standard]
+torch
+torchvision
+timm
+opencv-python
+pillow
+numpy
+pydantic
+python-multipart

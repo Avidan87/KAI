@@ -1,0 +1,15 @@
+# .dockerignore for KAI monorepo
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+.env
+venv/
+.idea/
+*.log
+dist/
+build/
+*.egg-info/
+Mobile App Development (1)/node_modules/
