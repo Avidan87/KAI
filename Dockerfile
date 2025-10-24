@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements-midas.txt ./midas-mcp-server/
+# Copy requirements first
+COPY midas-mcp-server/requirements-midas.txt ./midas-mcp-server/
 
 # Install Python dependencies
 RUN pip install --upgrade pip && pip install -r ./midas-mcp-server/requirements-midas.txt
