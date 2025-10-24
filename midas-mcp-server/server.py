@@ -3,8 +3,9 @@ MiDaS MCP Server for KAI Portion Agent
 Provides depth estimation and portion size calculation endpoints
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 import torch
@@ -25,14 +26,28 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware for Agent Builder integration
+# CORS middleware for Agent Builder integration and Railway healthchecks
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*", "healthcheck.railway.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Middleware to handle Railway healthcheck requests
+@app.middleware("http")
+async def railway_healthcheck_middleware(request: Request, call_next):
+    """Handle Railway healthcheck requests"""
+    # Log all requests for debugging
+    logger.info(f"Request: {request.method} {request.url} from {request.client.host}")
+    
+    # Handle Railway healthcheck hostname
+    if request.headers.get("host") == "healthcheck.railway.app":
+        logger.info("Railway healthcheck request detected")
+    
+    response = await call_next(request)
+    return response
 
 # Global model instance
 midas_model = None
@@ -103,11 +118,16 @@ async def startup_event():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {
-        "service": "MiDaS MCP Server",
-        "status": "running",
-        "model_loaded": midas_model is not None
-    }
+    logger.info("Root endpoint accessed")
+    return JSONResponse(
+        status_code=200,
+        content={
+            "service": "MiDaS MCP Server",
+            "status": "running",
+            "model_loaded": midas_model is not None,
+            "endpoints": ["/health", "/ready", "/estimate_depth", "/estimate_portion"]
+        }
+    )
 
 
 @app.get("/ready")
@@ -244,16 +264,21 @@ async def estimate_portion(
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Railway deployment"""
-    # Always return healthy status for basic healthcheck
+    # Always return HTTP 200 for Railway healthcheck
     # Railway just needs to know the service is responding
     # The model can load in the background
-    return {
-        "status": "healthy",
-        "service": "MiDaS MCP Server",
-        "model_loaded": midas_model is not None,
-        "device": str(device) if device else "not initialized",
-        "message": "Service is running" + (" (model ready)" if midas_model else " (model loading...)")
-    }
+    logger.info("Health check requested")
+    
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "healthy",
+            "service": "MiDaS MCP Server",
+            "model_loaded": midas_model is not None,
+            "device": str(device) if device else "not initialized",
+            "message": "Service is running" + (" (model ready)" if midas_model else " (model loading...)")
+        }
+    )
 
 
 if __name__ == "__main__":

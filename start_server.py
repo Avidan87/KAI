@@ -17,13 +17,21 @@ def main():
     """Main startup function"""
     logger.info("Starting KAI MiDaS server...")
     
-    # Get port from environment
+    # Get port from environment (Railway requirement)
     port = os.environ.get("PORT", "8000")
     host = "0.0.0.0"
     
+    # Validate port is a number
+    try:
+        port_int = int(port)
+        logger.info(f"Using port: {port_int}")
+    except ValueError:
+        logger.error(f"Invalid PORT value: {port}")
+        sys.exit(1)
+    
     logger.info(f"Starting server on {host}:{port}")
     
-    # Start the FastAPI server
+    # Start the FastAPI server with Railway-optimized settings
     cmd = [
         "uvicorn", 
         "midas-mcp-server.server:app",
@@ -31,7 +39,8 @@ def main():
         "--port", port,
         "--workers", "1",
         "--timeout-keep-alive", "30",
-        "--access-log"
+        "--access-log",
+        "--log-level", "info"
     ]
     
     logger.info(f"Running command: {' '.join(cmd)}")
