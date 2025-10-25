@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 import io
 import logging
-from portion_calculator import estimate_portion_from_depth
+from .portion_calculator import estimate_portion_from_depth
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

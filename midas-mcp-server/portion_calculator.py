@@ -7,7 +7,7 @@ import numpy as np
 import cv2
 from typing import Tuple, Optional, Dict
 import logging
-from nigerian_food_densities import get_density, estimate_weight_from_volume
+from .nigerian_food_densities import get_density, estimate_weight_from_volume
 
 logger = logging.getLogger(__name__)
 
