@@ -1,6 +1,6 @@
-# 🥗 KAI - AI-Powered Nutrition Intelligence for Nigerian Women
+# 🥗 KAI - AI-Powered Nutrition Intelligence for Nigerians
 
-**KAI** is an intelligent nutrition assistant designed specifically for Nigerian women, combining camera-first meal logging with culturally-adapted nutrition guidance. Built with a multi-agent AI architecture, KAI helps users track their nutrition, understand their dietary patterns, and receive personalized coaching tailored to Nigerian cuisine and health needs.
+**KAI** is an intelligent nutrition assistant designed specifically for Nigerians, combining camera-first meal logging with culturally-adapted nutrition guidance. Built with a multi-agent AI architecture, KAI helps users track nutrition, understand dietary patterns, and receive personalized coaching tailored to Nigerian cuisine and health needs.
 
 ## 🌟 Key Features
 
