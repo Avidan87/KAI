@@ -8,18 +8,20 @@ import { MicrosOverviewScreen } from "./components/MicrosOverviewScreen";
 import { ProfileScreen } from "./components/ProfileScreen";
 import { NotificationsScreen } from "./components/NotificationsScreen";
 import { ChatScreen } from "./components/ChatScreen";
+import { ChatDrawer } from "./components/ChatDrawer";
 import { MenuDrawer } from "./components/MenuDrawer";
 import { BottomActionBar } from "./components/BottomActionBar";
 import { Toaster } from "./components/ui/sonner";
 import { toast } from "sonner@2.0.3";
 
-type Screen = 'home' | 'camera' | 'processing' | 'result' | 'alert' | 'micros' | 'profile' | 'notifications' | 'chat';
+type Screen = 'home' | 'camera' | 'processing' | 'result' | 'alert' | 'micros' | 'profile' | 'notifications';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('home');
   const [capturedImage, setCapturedImage] = useState<string>('');
   const [mealResult, setMealResult] = useState<any>(null);
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
+  const [isChatDrawerOpen, setIsChatDrawerOpen] = useState<boolean>(false);
   const [chatContext, setChatContext] = useState<'iron' | 'general'>('general');
   const [isDetailSheetOpen, setIsDetailSheetOpen] = useState<boolean>(false);
 
@@ -123,7 +125,7 @@ export default function App() {
 
   const handleChatWithKAI = (context: 'iron' | 'general' = 'general') => {
     setChatContext(context);
-    navigateToScreen('chat');
+    setIsChatDrawerOpen(true);
   };
 
   const renderScreen = () => {
@@ -161,6 +163,7 @@ export default function App() {
             onConfirm={handleMealConfirm}
             onEdit={handleMealEdit}
             onAddSuggestion={handleAddSuggestion}
+            onChatWithKAI={() => handleChatWithKAI('iron')}
             result={mealResult}
             imageUrl={capturedImage}
           />
@@ -201,13 +204,6 @@ export default function App() {
             onActionClick={handleNotificationAction}
           />
         );
-      case 'chat':
-        return (
-          <ChatScreen 
-            onBack={() => navigateToScreen('home')}
-            initialContext={chatContext}
-          />
-        );
       default:
         return (
           <HomeScreen 
@@ -241,6 +237,11 @@ export default function App() {
         onClose={() => setIsMenuOpen(false)}
         onNavigate={navigateToScreen}
         currentScreen={currentScreen}
+      />
+      <ChatDrawer 
+        isOpen={isChatDrawerOpen}
+        onClose={() => setIsChatDrawerOpen(false)}
+        initialContext={chatContext}
       />
       <Toaster position="top-center" />
     </div>

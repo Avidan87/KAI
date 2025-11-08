@@ -13,7 +13,7 @@ Clean, modern bottom action bar for the Home screen only. Features three core ac
 
 ### 1. BottomActionBar.tsx
 Main navigation bar with three actions:
-- **Left**: Chat (opens Coach screen) - Speech bubble icon
+- **Left**: Chat (opens Coach drawer from bottom) - Speech bubble icon
 - **Center**: Log Meal (opens Camera) - Plus icon, primary fill
 - **Right**: Micros (opens Micros Overview) - 5-dot vitamin cluster
 
@@ -109,9 +109,10 @@ Alternative flask+sparkles variant included for future use.
 - Processing (full-screen analysis)
 - Insights (has native header)
 - Micros Overview (has native header)
-- Coach/Chat (has native header + input)
 - Profile (has native header)
 - Notifications (has native header)
+
+**Note**: Chat is now a bottom drawer that overlays the Home screen, so the action bar remains visible beneath it.
 
 ## Accessibility
 
@@ -150,7 +151,7 @@ Micronutrient colors (defined in globals.css):
 ### App.tsx Updates
 - Bottom action bar **only** shows when `currentScreen === 'home'`
 - Routes:
-  - Chat → `handleChatWithKAI('general')`
+  - Chat → `handleChatWithKAI('general')` → Opens ChatDrawer (bottom drawer)
   - Plus → `handleLogMeal()` → Camera screen
   - Micros → `navigateToScreen('micros')` → Micros Overview
 

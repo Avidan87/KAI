@@ -1,12 +1,13 @@
-import { ArrowLeft, Settings, Send } from "lucide-react";
+import { Settings, Send, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 
-interface ChatScreenProps {
-  onBack: () => void;
+interface ChatDrawerProps {
+  isOpen: boolean;
+  onClose: () => void;
   initialContext?: 'iron' | 'general';
 }
 
@@ -19,7 +20,7 @@ interface ChatMessage {
   data?: any;
 }
 
-export function ChatScreen({ onBack, initialContext = 'general' }: ChatScreenProps) {
+export function ChatDrawer({ isOpen, onClose, initialContext = 'general' }: ChatDrawerProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -27,6 +28,10 @@ export function ChatScreen({ onBack, initialContext = 'general' }: ChatScreenPro
 
   // Initialize conversation
   useEffect(() => {
+    if (!isOpen) return;
+    
+    setMessages([]); // Reset messages when drawer opens
+    
     if (initialContext === 'iron') {
       // Open with iron context
       setTimeout(() => {
@@ -65,7 +70,7 @@ export function ChatScreen({ onBack, initialContext = 'general' }: ChatScreenPro
         });
       }, 300);
     }
-  }, [initialContext]);
+  }, [isOpen, initialContext]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -175,66 +180,98 @@ export function ChatScreen({ onBack, initialContext = 'general' }: ChatScreenPro
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border bg-card">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={onBack} className="text-[rgb(255,248,248)]">
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div>
-            <h1 className="font-semibold text-foreground">KAI Coach</h1>
-            <p className="text-xs text-muted-foreground">Your nutrition assistant</p>
-          </div>
-        </div>
-        <Button variant="ghost" size="icon">
-          <Settings className="w-5 h-5" />
-        </Button>
-      </div>
-
-      {/* Messages Area */}
-      <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
-        {messages.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <div className="space-y-4 pb-4">
-            <AnimatePresence>
-              {messages.map((message) => (
-                <ChatMessageComponent 
-                  key={message.id} 
-                  message={message}
-                  onQuickReply={handleQuickReply}
-                  onAction={handleActionButton}
-                />
-              ))}
-            </AnimatePresence>
-
-            {/* Typing Indicator */}
-            {isTyping && <TypingIndicator />}
-          </div>
-        )}
-      </ScrollArea>
-
-      {/* Input Area */}
-      <div className="p-4 border-t border-border bg-card">
-        <div className="flex items-center gap-2">
-          <Input
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-            placeholder="Type message..."
-            className="flex-1 text-[rgb(252,246,246)]"
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 z-40"
+            onClick={onClose}
           />
-          <Button 
-            size="icon" 
-            onClick={handleSendMessage}
-            disabled={!inputValue.trim()}
+
+          {/* Drawer */}
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+            className="fixed bottom-0 left-0 right-0 z-50 bg-[rgb(13,13,13)] rounded-t-3xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl"
           >
-            <Send className="w-4 h-4" />
-          </Button>
-        </div>
-      </div>
-    </div>
+            {/* Handle */}
+            <div className="flex justify-center py-3 bg-[rgb(13,13,13)]">
+              <div className="w-12 h-1 bg-muted-foreground/30 rounded-full" />
+            </div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 pb-3 border-b border-border bg-[rgb(13,13,13)]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-xl">
+                  🤖
+                </div>
+                <div>
+                  <h2 className="font-semibold text-[rgb(255,248,248)]">KAI Coach</h2>
+                  <p className="text-xs text-muted-foreground">Your nutrition assistant</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="icon" className="text-[rgb(255,255,255)]">
+                  <Settings className="w-5 h-5" />
+                </Button>
+                <Button variant="ghost" size="icon" onClick={onClose} className="text-[rgb(255,255,255)]">
+                  <X className="w-5 h-5" />
+                </Button>
+              </div>
+            </div>
+
+            {/* Messages Area */}
+            <ScrollArea className="flex-1 p-4 bg-[rgb(13,13,13)]" ref={scrollAreaRef}>
+              {messages.length === 0 ? (
+                <EmptyState />
+              ) : (
+                <div className="space-y-4 pb-4">
+                  <AnimatePresence>
+                    {messages.map((message) => (
+                      <ChatMessageComponent 
+                        key={message.id} 
+                        message={message}
+                        onQuickReply={handleQuickReply}
+                        onAction={handleActionButton}
+                      />
+                    ))}
+                  </AnimatePresence>
+
+                  {/* Typing Indicator */}
+                  {isTyping && <TypingIndicator />}
+                </div>
+              )}
+            </ScrollArea>
+
+            {/* Input Area */}
+            <div className="p-4 border-t border-border bg-[rgb(13,13,13)]">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                  placeholder="Type message..."
+                  className="flex-1 text-[rgb(252,246,246)]"
+                />
+                <Button 
+                  size="icon" 
+                  onClick={handleSendMessage}
+                  disabled={!inputValue.trim()}
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -242,24 +279,21 @@ export function ChatScreen({ onBack, initialContext = 'general' }: ChatScreenPro
 function EmptyState() {
   return (
     <motion.div 
-      className="flex flex-col items-center justify-center h-full py-16 px-6 text-center"
+      className="flex flex-col items-center justify-center h-full py-12 px-6 text-center"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
     >
-      <div className="text-6xl mb-4">🤖</div>
-      <h2 className="text-xl font-semibold text-foreground mb-2">
+      <div className="text-5xl mb-3">🤖</div>
+      <h2 className="text-lg font-semibold text-[rgb(255,248,248)] mb-2">
         Hi Adaeze! I'm KAI,
       </h2>
-      <p className="text-muted-foreground mb-2">
+      <p className="text-sm text-muted-foreground mb-2">
         your nutrition coach.
       </p>
-      <p className="text-muted-foreground mb-6">
+      <p className="text-sm text-muted-foreground">
         I'll help you understand your health through the foods you love! 🇳🇬
       </p>
-      <Button onClick={() => {}}>
-        Start Conversation
-      </Button>
     </motion.div>
   );
 }

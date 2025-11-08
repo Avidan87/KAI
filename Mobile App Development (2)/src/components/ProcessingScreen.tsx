@@ -12,11 +12,21 @@ interface ProcessingScreenProps {
 export function ProcessingScreen({ onBack, onComplete, imageUrl }: ProcessingScreenProps) {
   const [progress, setProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState(0);
+  const [detectedItems, setDetectedItems] = useState<string[]>([]);
   
   const steps = [
     "Detecting food items...",
     "Estimating portions...", 
     "Calculating nutrition..."
+  ];
+
+  // Dynamic detected food items that appear progressively
+  const foodDetections = [
+    { step: 0, message: "Found: Egusi soup 🍲", delay: 800 },
+    { step: 0, message: "Found: Pounded yam 🥘", delay: 1500 },
+    { step: 1, message: "Portion: ~2 cups soup", delay: 2800 },
+    { step: 1, message: "Portion: ~1 medium ball yam", delay: 3500 },
+    { step: 2, message: "Analyzing nutrients...", delay: 5000 }
   ];
 
   useEffect(() => {
@@ -53,6 +63,17 @@ export function ProcessingScreen({ onBack, onComplete, imageUrl }: ProcessingScr
 
     return () => clearInterval(timer);
   }, [currentStep, onComplete]);
+
+  // Progressive food detection messages
+  useEffect(() => {
+    foodDetections.forEach((detection) => {
+      setTimeout(() => {
+        if (currentStep >= detection.step) {
+          setDetectedItems(prev => [...prev, detection.message]);
+        }
+      }, detection.delay);
+    });
+  }, [currentStep]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -104,6 +125,21 @@ export function ProcessingScreen({ onBack, onComplete, imageUrl }: ProcessingScr
             </div>
           ))}
         </div>
+
+        {/* Dynamic Detection Messages */}
+        {detectedItems.length > 0 && (
+          <div className="bg-primary/10 p-4 rounded-lg space-y-2">
+            <p className="text-xs font-semibold text-primary mb-2">🔍 Detected:</p>
+            {detectedItems.map((item, index) => (
+              <div 
+                key={index}
+                className="text-sm text-[rgb(255,250,250)] pl-3 border-l-2 border-primary/40 animate-in fade-in slide-in-from-left-2"
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Fun fact while waiting */}
         <div className="bg-muted/50 p-4 rounded-lg">

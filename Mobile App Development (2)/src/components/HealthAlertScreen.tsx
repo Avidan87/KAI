@@ -16,7 +16,7 @@ export function HealthAlertScreen({ onBack, onStartPlan }: HealthAlertScreenProp
         <Button variant="ghost" size="icon" onClick={onBack}>
           <ArrowLeft className="w-6 h-6" />
         </Button>
-        <h1 className="text-lg font-semibold">YOUR IRON BOOST PLAN</h1>
+        <h1 className="text-lg font-semibold text-[rgb(249,237,237)]">YOUR IRON BOOST PLAN</h1>
         <div className="w-10"></div>
       </div>
 
@@ -36,7 +36,7 @@ export function HealthAlertScreen({ onBack, onStartPlan }: HealthAlertScreenProp
 
         {/* Weekly Plan */}
         <div>
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-[rgb(255,242,242)]">
             🍽️ ADD THESE THIS WEEK:
           </h3>
 

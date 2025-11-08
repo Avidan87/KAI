@@ -104,15 +104,15 @@ export function FuelTankDetailSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="fixed bottom-0 left-0 right-0 z-50 bg-background rounded-t-3xl max-h-[90vh] overflow-hidden shadow-2xl"
+            className="fixed bottom-0 left-0 right-0 z-50 bg-[rgb(13,13,13)] rounded-t-3xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl"
           >
             {/* Handle */}
-            <div className="flex justify-center py-4">
+            <div className="flex justify-center py-4 bg-[rgb(13,13,13)]">
               <div className="w-12 h-1 bg-muted-foreground/30 rounded-full" />
             </div>
 
             {/* Header */}
-            <div className="flex items-center justify-between px-6 pb-4">
+            <div className="flex items-center justify-between px-6 pb-4 bg-[rgb(13,13,13)]">
               <h2 className="text-xl font-semibold text-[rgb(255,248,248)]">FUEL BREAKDOWN</h2>
               <Button variant="ghost" size="icon" onClick={onClose}>
                 <X className="w-6 h-6" />
@@ -120,7 +120,7 @@ export function FuelTankDetailSheet({
             </div>
 
             {/* Content */}
-            <div className="px-6 pb-8 overflow-y-auto max-h-[calc(90vh-100px)] bg-background">
+            <div className="px-6 pb-8 overflow-y-auto flex-1 bg-[rgb(13,13,13)]">
               {/* Large Fuel Tank */}
               <div className="flex justify-center mb-6">
                 <div className="relative">

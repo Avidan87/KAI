@@ -1,0 +1,275 @@
+"""
+Pydantic Models for Agent Communication
+
+Defines the data structures used for inter-agent communication in the KAI system.
+"""
+
+from typing import List, Dict, Any, Optional, Literal
+from pydantic import BaseModel, Field, ConfigDict
+
+
+# ============================================================================
+# Request Models
+# ============================================================================
+
+class ChatRequest(BaseModel):
+    """General chat/query request (user_id extracted from JWT token)"""
+    message: str
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class NutritionQueryRequest(BaseModel):
+    """Specific nutrition information query"""
+    user_id: str
+    query: str
+    food_name: Optional[str] = None
+
+
+# ============================================================================
+# Triage Agent Models
+# ============================================================================
+
+class TriageResult(BaseModel):
+    """Result from Triage Agent routing decision"""
+    workflow: Literal["food_logging", "nutrition_query", "health_coaching", "general_chat"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str
+    requires_vision: bool = False
+    requires_knowledge_base: bool = False
+    requires_web_search: bool = False
+    extracted_food_names: List[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Vision Agent Models
+# ============================================================================
+
+class DetectedFood(BaseModel):
+    """Single detected food item from image"""
+    name: str
+    nigerian_name: Optional[str] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    estimated_portion: str
+    estimated_grams: float
+    visible_ingredients: List[str] = Field(default_factory=list)
+
+
+class VisionResult(BaseModel):
+    """Result from Vision Agent analysis"""
+    detected_foods: List[DetectedFood]
+    meal_context: str
+    cooking_method: Optional[str] = None
+    overall_confidence: float = Field(ge=0.0, le=1.0)
+    needs_clarification: bool = False
+    clarification_questions: List[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Knowledge Agent Models
+# ============================================================================
+
+class NutrientInfo(BaseModel):
+    """Nutrient information per 100g"""
+    calories: float
+    protein: float
+    carbohydrates: float
+    fat: float
+    iron: float
+    calcium: float
+    vitamin_a: float
+    zinc: float
+
+
+class FoodNutritionData(BaseModel):
+    """Complete nutrition data for a food item"""
+    food_id: str
+    name: str
+    category: str
+    portion_consumed_grams: float
+    nutrients_per_100g: NutrientInfo
+    total_nutrients: NutrientInfo  # Calculated for actual portion
+    health_benefits: List[str] = Field(default_factory=list)
+    cultural_significance: str = ""
+    common_pairings: List[str] = Field(default_factory=list)
+    dietary_flags: List[str] = Field(default_factory=list)
+    price_tier: str = "mid"
+    similarity_score: float = 1.0
+
+
+class KnowledgeResult(BaseModel):
+    """Result from Knowledge Agent RAG lookup"""
+    foods: List[FoodNutritionData]
+    total_calories: float
+    total_protein: float
+    total_iron: float
+    total_calcium: float
+    query_interpretation: str
+    sources_used: List[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Coaching Agent Models
+# ============================================================================
+
+class NutrientInsight(BaseModel):
+    """Insight about a specific nutrient"""
+    nutrient: str
+    current_value: float
+    recommended_daily_value: float
+    percentage_met: float
+    status: Literal["deficient", "adequate", "optimal", "excessive"]
+    advice: str
+
+
+class MealSuggestion(BaseModel):
+    """Personalized meal suggestion"""
+    meal_name: str
+    meal_type: Literal["breakfast", "lunch", "dinner", "snack"]
+    ingredients: List[str]
+    estimated_cost: str
+    key_nutrients: Dict[str, float]
+    why_recommended: str
+
+
+class CoachingResult(BaseModel):
+    """Result from Coaching Agent"""
+    personalized_message: str
+    nutrient_insights: List[NutrientInsight] = Field(default_factory=list)
+    meal_suggestions: List[MealSuggestion] = Field(default_factory=list)
+    motivational_tip: str
+    next_steps: List[str] = Field(default_factory=list)
+    tone: Literal["encouraging", "celebratory", "educational", "supportive"] = "encouraging"
+
+
+# ============================================================================
+# Final Response Models
+# ============================================================================
+
+class FoodLoggingResponse(BaseModel):
+    """Complete response for food logging workflow"""
+    success: bool
+    message: str
+    detected_foods: List[DetectedFood] = Field(default_factory=list)
+    nutrition_data: Optional[KnowledgeResult] = None
+    coaching: Optional[CoachingResult] = None
+    total_calories: float = 0.0
+    total_protein: float = 0.0
+    total_iron: float = 0.0
+    processing_time_ms: int = 0
+    workflow_path: str = ""
+
+
+class ChatResponse(BaseModel):
+    """Response for general chat/query"""
+    success: bool
+    message: str
+    nutrition_data: Optional[KnowledgeResult] = None  # Include nutrition if query was about food
+    coaching: Optional[CoachingResult] = None  # Include full coaching data
+    sources: List[str] = Field(default_factory=list)
+    follow_up_suggestions: List[str] = Field(default_factory=list)
+    processing_time_ms: int = 0
+    workflow_path: str = ""  # Show which workflow was used
+
+
+# ============================================================================
+# Endpoint Models
+# ============================================================================
+
+class LogMealRequest(BaseModel):
+    """Request to save meal to database (user_id extracted from JWT token)"""
+    meal_type: Literal["breakfast", "lunch", "dinner", "snack"]
+    foods: List[Dict[str, Any]]  # Food objects with nutrition
+    meal_date: Optional[str] = None  # ISO YYYY-MM-DD
+    image_url: Optional[str] = None
+    user_description: Optional[str] = None
+
+
+class LogMealResponse(BaseModel):
+    """Response from saving meal"""
+    success: bool
+    message: str
+    meal_id: str
+    meal_date: str
+    meal_time: str
+    foods_count: int
+    totals: Dict[str, float]
+    daily_totals: Optional[Dict[str, Any]] = None
+    processing_time_ms: int = 0
+
+
+class MealHistoryResponse(BaseModel):
+    """Response with user's meal history"""
+    success: bool
+    message: str
+    meals: List[Dict[str, Any]] = Field(default_factory=list)
+    total_count: int
+    processing_time_ms: int = 0
+
+
+class UserProfileResponse(BaseModel):
+    """Response with user profile"""
+    success: bool
+    message: str
+    user_id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    gender: str
+    age: int
+    is_pregnant: bool = False
+    is_lactating: bool = False
+    has_anemia: bool = False
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    activity_level: Optional[str] = None
+    health_goals: Optional[str] = None
+    dietary_restrictions: Optional[str] = None
+    rdv: Dict[str, float] = Field(default_factory=dict)
+    processing_time_ms: int = 0
+
+
+class UpdateUserProfileRequest(BaseModel):
+    """Request to update user profile"""
+    email: Optional[str] = None
+    name: Optional[str] = None
+    gender: Optional[Literal["male", "female"]] = None
+    age: Optional[int] = None
+    is_pregnant: Optional[bool] = None
+    is_lactating: Optional[bool] = None
+    has_anemia: Optional[bool] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    activity_level: Optional[Literal["sedentary", "light", "moderate", "active", "very_active"]] = None
+    health_goals: Optional[str] = None
+    dietary_restrictions: Optional[str] = None
+
+
+class UserStatsResponse(BaseModel):
+    """Response with user daily stats"""
+    success: bool
+    message: str
+    user_id: str
+    date: str
+    daily_totals: Optional[Dict[str, Any]] = None
+    rdv_percentages: Dict[str, float] = Field(default_factory=dict)
+    meal_count: int = 0
+    processing_time_ms: int = 0
+
+
+# ============================================================================
+# Agent Context (shared state between agents)
+# ============================================================================
+
+class AgentContext(BaseModel):
+    """Shared context passed between agents in a workflow"""
+    request_id: str
+    user_id: str
+    workflow: str
+    triage_result: Optional[TriageResult] = None
+    vision_result: Optional[VisionResult] = None
+    knowledge_result: Optional[KnowledgeResult] = None
+    coaching_result: Optional[CoachingResult] = None
+    user_preferences: Dict[str, Any] = Field(default_factory=dict)
+    user_nutrition_history: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)

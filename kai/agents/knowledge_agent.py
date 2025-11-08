@@ -1,0 +1,526 @@
+"""
+Knowledge Agent - Nigerian Food Nutrition Retrieval
+
+Uses ChromaDB RAG (Retrieval-Augmented Generation) to retrieve accurate
+nutrition information for Nigerian foods from the enriched knowledge base.
+
+Uses GPT-4o-mini for cost-efficient knowledge retrieval and synthesis.
+"""
+
+import json
+import logging
+from typing import Dict, Any, Optional, List
+from openai import AsyncOpenAI
+from agents import Agent
+from dotenv import load_dotenv
+import os
+import asyncio
+
+from kai.models import KnowledgeResult, FoodNutritionData, NutrientInfo
+from kai.rag.chromadb_setup import NigerianFoodVectorDB
+
+load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+class KnowledgeAgent:
+    """
+    Knowledge Agent for retrieving Nigerian food nutrition data via RAG.
+
+    Uses OpenAI Agents SDK with ChromaDB for semantic search and
+    nutrition data retrieval.
+
+    Capabilities:
+    - Semantic search over 50+ Nigerian foods
+    - Portion-adjusted nutrition calculations
+    - Similarity matching for food name variations
+    - Aggregate nutrition totals for meals
+    - Cultural context and health benefits
+    """
+
+    def __init__(
+        self,
+        openai_api_key: Optional[str] = None,
+        chromadb_path: str = "chromadb_data"
+    ):
+        """Initialize Knowledge Agent with ChromaDB and GPT-4o-mini."""
+        api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found")
+
+        self.client = AsyncOpenAI(api_key=api_key)
+        self.model = "gpt-4o-mini"  # Cost-efficient for RAG
+
+        # Initialize ChromaDB vector store
+        self.vector_db = NigerianFoodVectorDB(
+            persist_directory=chromadb_path,
+            collection_name="nigerian_foods",
+            openai_api_key=api_key
+        )
+
+        # Setup agent with RAG tools
+        self._setup_agent()
+
+    def _setup_agent(self):
+        """
+        Setup OpenAI Agent with Nigerian food knowledge retrieval tools.
+
+        Creates an Agent instance with tools for RAG-based nutrition lookup.
+        """
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_nigerian_foods",
+                    "description": (
+                        "Search the Nigerian food knowledge base for nutrition information. "
+                        "Uses semantic search to find matching foods even with name variations. "
+                        "Returns detailed nutrition data per 100g and cultural context."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "food_names": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of Nigerian food names to search for"
+                            },
+                            "portions_grams": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": "Portion sizes in grams for each food"
+                            }
+                        },
+                        "required": ["food_names", "portions_grams"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_foods_by_nutrient",
+                    "description": (
+                        "Find Nigerian foods that are high in a specific nutrient. "
+                        "Useful for recommendations based on nutritional needs."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "nutrient": {
+                                "type": "string",
+                                "enum": ["protein", "iron", "calcium", "vitamin_a"],
+                                "description": "Nutrient to search for"
+                            },
+                            "min_value": {
+                                "type": "number",
+                                "description": "Minimum value of nutrient per 100g"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return"
+                            }
+                        },
+                        "required": ["nutrient", "min_value"]
+                    }
+                }
+            }
+        ]
+
+        # Create agent instructions
+        agent_instructions = """You are KAI's Knowledge Agent, an expert in Nigerian food nutrition data.
+
+Your mission is to retrieve accurate nutrition information from the Nigerian food knowledge base to help women track their nutritional intake.
+
+**Your Knowledge Base:**
+- 50+ enriched Nigerian foods with verified nutrition data
+- Nutrients per 100g (calories, protein, carbs, fat, iron, calcium, vitamin A, zinc)
+- Cultural significance and regional variations
+- Health benefits and common pairings
+- Dietary flags (vegetarian, gluten-free, etc.)
+
+**Your Approach:**
+1. Use semantic search to match food names (handles aliases and variations)
+2. Calculate portion-adjusted nutrition values
+3. Aggregate totals for complete meals
+4. Provide cultural context and health insights
+5. Flag missing or uncertain data
+
+**Accuracy Priorities:**
+- Verified nutrition data over estimates
+- Portion accuracy is critical for women's health tracking
+- Clear communication about data confidence
+- Cultural relevance in food descriptions
+
+Use the search_nigerian_foods tool to retrieve nutrition data for detected foods.
+Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
+
+        self.agent = Agent(
+            name="KAI Knowledge Agent",
+            instructions=agent_instructions,
+            model=self.model,
+            tools=tools
+        )
+
+        logger.info(f"✓ Knowledge Agent initialized with {len(tools)} tool(s)")
+
+    async def retrieve_nutrition(
+        self,
+        food_names: List[str],
+        portions_grams: List[float]
+    ) -> KnowledgeResult:
+        """
+        Retrieve nutrition data for a list of foods with portions.
+
+        Args:
+            food_names: List of Nigerian food names
+            portions_grams: Corresponding portion sizes in grams
+
+        Returns:
+            KnowledgeResult with nutrition data and totals
+        """
+        try:
+            logger.info(f"🔍 Retrieving nutrition for {len(food_names)} foods")
+
+            # Call the tool function directly (SDK pattern)
+            result_json = await self._tool_search_nigerian_foods(
+                food_names=food_names,
+                portions_grams=portions_grams
+            )
+
+            # Parse tool result
+            result_dict = json.loads(result_json)
+
+            # Convert to KnowledgeResult
+            knowledge_result = self._parse_knowledge_result(result_dict)
+
+            logger.info(
+                f"✅ Retrieved {len(knowledge_result.foods)} foods | "
+                f"Total: {knowledge_result.total_calories:.0f} cal, "
+                f"{knowledge_result.total_protein:.1f}g protein, "
+                f"{knowledge_result.total_iron:.1f}mg iron"
+            )
+
+            return knowledge_result
+
+        except Exception as e:
+            logger.error(f"Knowledge retrieval error: {e}", exc_info=True)
+            raise
+
+    async def _tool_search_nigerian_foods(
+        self,
+        food_names: List[str],
+        portions_grams: List[float]
+    ) -> str:
+        """
+        Tool function for searching Nigerian food nutrition data.
+
+        This is the actual RAG implementation that queries ChromaDB.
+
+        Args:
+            food_names: List of food names to search
+            portions_grams: Portion sizes in grams
+
+        Returns:
+            JSON string with nutrition results
+        """
+        logger.info(f"🔧 Tool: search_nigerian_foods ({len(food_names)} foods)")
+
+        if len(food_names) != len(portions_grams):
+            raise ValueError("food_names and portions_grams must have same length")
+
+        foods_data = []
+        total_calories = 0.0
+        total_protein = 0.0
+        total_iron = 0.0
+        total_calcium = 0.0
+
+        async def search_one(food_name: str, portion_g: float):
+            logger.info(f"   Searching: {food_name} ({portion_g}g)")
+            # Run sync DB search in a worker thread
+            results = await asyncio.to_thread(
+                self.vector_db.search,
+                food_name,
+                1
+            )
+            return (food_name, portion_g, results)
+
+        tasks = [search_one(fn, pg) for fn, pg in zip(food_names, portions_grams)]
+        search_results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        for food_name, portion_g, results in search_results:
+            if not results:
+                logger.warning(f"   ✗ No match found for: {food_name}")
+                continue
+
+            match = results[0]
+            metadata = match["metadata"]
+
+            portion_multiplier = portion_g / 100.0
+
+            nutrients_per_100g = {
+                "calories": metadata.get("calories", 0),
+                "protein": metadata.get("protein", 0),
+                "carbohydrates": metadata.get("carbohydrates", 0),
+                "fat": metadata.get("fat", 0),
+                "iron": metadata.get("iron", 0),
+                "calcium": metadata.get("calcium", 0),
+                "vitamin_a": metadata.get("vitamin_a", 0),
+                "zinc": metadata.get("zinc", 0)
+            }
+
+            total_nutrients = {
+                key: value * portion_multiplier
+                for key, value in nutrients_per_100g.items()
+            }
+
+            total_calories += total_nutrients["calories"]
+            total_protein += total_nutrients["protein"]
+            total_iron += total_nutrients["iron"]
+            total_calcium += total_nutrients["calcium"]
+
+            dietary_flags_str = metadata.get("dietary_flags", "")
+            dietary_flags = [f.strip() for f in dietary_flags_str.split(",") if f.strip()]
+
+            food_data = {
+                "food_id": metadata.get("food_id", "unknown"),
+                "name": metadata.get("name", food_name),
+                "category": metadata.get("category", "unknown"),
+                "portion_consumed_grams": portion_g,
+                "nutrients_per_100g": nutrients_per_100g,
+                "total_nutrients": total_nutrients,
+                "health_benefits": [],
+                "cultural_significance": "",
+                "common_pairings": [],
+                "dietary_flags": dietary_flags,
+                "price_tier": metadata.get("price_tier", "mid"),
+                "similarity_score": match.get("similarity", 1.0)
+            }
+
+            foods_data.append(food_data)
+
+            logger.info(
+                f"   ✓ Matched: {food_data['name']} "
+                f"(similarity: {food_data['similarity_score']:.2f})"
+            )
+
+        # Build result
+        result = {
+            "foods": foods_data,
+            "total_calories": total_calories,
+            "total_protein": total_protein,
+            "total_iron": total_iron,
+            "total_calcium": total_calcium,
+            "query_interpretation": f"Retrieved {len(foods_data)}/{len(food_names)} foods",
+            "sources_used": ["ChromaDB Nigerian Foods Collection"]
+        }
+
+        logger.info(
+            f"   📊 Totals: {total_calories:.0f} cal | "
+            f"{total_protein:.1f}g protein | "
+            f"{total_iron:.1f}mg iron"
+        )
+
+        return json.dumps(result)
+
+    async def _tool_get_foods_by_nutrient(
+        self,
+        nutrient: str,
+        min_value: float,
+        max_results: int = 10
+    ) -> str:
+        """
+        Tool function for finding foods high in a specific nutrient.
+
+        Args:
+            nutrient: Nutrient name (protein, iron, calcium, vitamin_a)
+            min_value: Minimum value per 100g
+            max_results: Maximum results to return
+
+        Returns:
+            JSON string with high-nutrient foods
+        """
+        logger.info(
+            f"🔧 Tool: get_foods_by_nutrient "
+            f"(nutrient={nutrient}, min={min_value})"
+        )
+
+        results = await asyncio.to_thread(
+            self.vector_db.get_foods_by_nutrient,
+            nutrient,
+            min_value,
+            max_results
+        )
+
+        foods_data = []
+        for result in results:
+            food_data = {
+                "food_id": result["id"],
+                "name": result["name"],
+                "category": result["category"],
+                f"{nutrient}_per_100g": result[f"{nutrient}_per_100g"],
+                "metadata": result["metadata"]
+            }
+            foods_data.append(food_data)
+
+        logger.info(f"   ✓ Found {len(foods_data)} foods high in {nutrient}")
+
+        return json.dumps({"foods": foods_data, "nutrient": nutrient})
+
+    def _parse_knowledge_result(self, result_dict: Dict[str, Any]) -> KnowledgeResult:
+        """
+        Parse JSON result into KnowledgeResult model.
+
+        Args:
+            result_dict: Parsed JSON from tool
+
+        Returns:
+            Structured KnowledgeResult
+        """
+        foods = []
+
+        for food_data in result_dict.get("foods", []):
+            # Create NutrientInfo objects
+            nutrients_per_100g = NutrientInfo(**food_data["nutrients_per_100g"])
+            total_nutrients = NutrientInfo(**food_data["total_nutrients"])
+
+            # Create FoodNutritionData
+            food_nutrition = FoodNutritionData(
+                food_id=food_data["food_id"],
+                name=food_data["name"],
+                category=food_data["category"],
+                portion_consumed_grams=food_data["portion_consumed_grams"],
+                nutrients_per_100g=nutrients_per_100g,
+                total_nutrients=total_nutrients,
+                health_benefits=food_data.get("health_benefits", []),
+                cultural_significance=food_data.get("cultural_significance", ""),
+                common_pairings=food_data.get("common_pairings", []),
+                dietary_flags=food_data.get("dietary_flags", []),
+                price_tier=food_data.get("price_tier", "mid"),
+                similarity_score=food_data.get("similarity_score", 1.0)
+            )
+            foods.append(food_nutrition)
+
+        return KnowledgeResult(
+            foods=foods,
+            total_calories=result_dict.get("total_calories", 0.0),
+            total_protein=result_dict.get("total_protein", 0.0),
+            total_iron=result_dict.get("total_iron", 0.0),
+            total_calcium=result_dict.get("total_calcium", 0.0),
+            query_interpretation=result_dict.get("query_interpretation", ""),
+            sources_used=result_dict.get("sources_used", [])
+        )
+
+
+# ============================================================================
+# Convenience Functions
+# ============================================================================
+
+def retrieve_food_nutrition(
+    food_names: List[str],
+    portions_grams: List[float],
+    openai_api_key: Optional[str] = None,
+    chromadb_path: str = "chromadb_data"
+) -> KnowledgeResult:
+    """
+    Convenience function for single nutrition retrieval.
+
+    Args:
+        food_names: List of Nigerian food names
+        portions_grams: Portion sizes in grams
+        openai_api_key: Optional API key override
+        chromadb_path: Path to ChromaDB data
+
+    Returns:
+        KnowledgeResult with nutrition data
+    """
+    agent = KnowledgeAgent(
+        openai_api_key=openai_api_key,
+        chromadb_path=chromadb_path
+    )
+    return asyncio.run(agent.retrieve_nutrition(food_names, portions_grams))
+
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+if __name__ == "__main__":
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    async def test_knowledge_agent():
+        """Test Knowledge Agent with sample queries."""
+
+        print("\n" + "="*60)
+        print("Testing Knowledge Agent - Nigerian Food Nutrition RAG")
+        print("="*60 + "\n")
+
+        # Initialize agent
+        agent = KnowledgeAgent()
+
+        print(f"Model: {agent.model}")
+        print(f"ChromaDB: {agent.vector_db.collection_name}")
+        print(f"Total foods in DB: {agent.vector_db.get_collection_stats()['total_foods']}")
+
+        # Test 1: Single food lookup
+        print("\n" + "-"*60)
+        print("Test 1: Single Food Lookup")
+        print("-"*60)
+
+        result = await agent.retrieve_nutrition(
+            food_names=["Jollof Rice"],
+            portions_grams=[250.0]
+        )
+
+        print(f"\nFood: {result.foods[0].name}")
+        print(f"Portion: {result.foods[0].portion_consumed_grams}g")
+        print(f"Calories: {result.foods[0].total_nutrients.calories:.0f}")
+        print(f"Protein: {result.foods[0].total_nutrients.protein:.1f}g")
+        print(f"Iron: {result.foods[0].total_nutrients.iron:.1f}mg")
+        print(f"Similarity: {result.foods[0].similarity_score:.2f}")
+
+        # Test 2: Multiple foods (meal)
+        print("\n" + "-"*60)
+        print("Test 2: Complete Meal")
+        print("-"*60)
+
+        result = await agent.retrieve_nutrition(
+            food_names=["Jollof Rice", "Fried Plantain", "Chicken"],
+            portions_grams=[250.0, 100.0, 120.0]
+        )
+
+        print(f"\nMeal with {len(result.foods)} foods:")
+        for food in result.foods:
+            print(f"  - {food.name} ({food.portion_consumed_grams}g)")
+
+        print(f"\nTotal Nutrition:")
+        print(f"  Calories: {result.total_calories:.0f}")
+        print(f"  Protein: {result.total_protein:.1f}g")
+        print(f"  Iron: {result.total_iron:.1f}mg")
+        print(f"  Calcium: {result.total_calcium:.1f}mg")
+
+        # Test 3: High-iron foods
+        print("\n" + "-"*60)
+        print("Test 3: High-Iron Foods")
+        print("-"*60)
+
+        high_iron_json = await agent._tool_get_foods_by_nutrient(
+            nutrient="iron",
+            min_value=3.0,
+            max_results=5
+        )
+
+        high_iron = json.loads(high_iron_json)
+        print(f"\nFoods with >3mg iron per 100g:")
+        for food in high_iron["foods"]:
+            print(f"  - {food['name']}: {food['iron_per_100g']}mg")
+
+        print("\n" + "="*60)
+        print("Knowledge Agent Tests Complete!")
+        print("="*60 + "\n")
+
+    # Run tests
+    asyncio.run(test_knowledge_agent())
