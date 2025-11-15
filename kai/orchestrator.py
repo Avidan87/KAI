@@ -26,6 +26,7 @@ from kai.database import (
     log_meal,
     get_daily_nutrition_totals,
 )
+from kai.jobs import calculate_and_update_user_stats
 
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,14 @@ async def handle_user_request(
                 )
                 logger.info(f"   → Saved meal to database: {meal_record['meal_id']}")
 
+                # Update user stats (calculate weekly averages, trends, streaks)
+                # This MUST happen after meal logging so coaching has latest stats
+                try:
+                    updated_stats = await calculate_and_update_user_stats(user_id)
+                    logger.info(f"   → Updated user stats: {updated_stats.get('total_meals_logged', 0)} meals, {updated_stats.get('current_logging_streak', 0)} day streak")
+                except Exception as stats_error:
+                    logger.error(f"Stats update error (non-fatal): {stats_error}")
+
                 # Fetch daily totals and health profile concurrently
                 daily_totals_task = asyncio.create_task(get_daily_nutrition_totals(user_id))
                 health_profile_task = asyncio.create_task(get_user_health_profile(user_id))
@@ -196,23 +205,17 @@ async def handle_user_request(
         coaching = _get_agent("coaching")
 
         # Build user context with health profile if available
+        # NOTE: New coaching agent uses user_id to fetch stats, RDV, and history
         user_context = {
-            "gender": user_gender,
-            "age": user_age,
-            "user_id": user_id,
+            "budget": "mid",  # Could be from user profile
+            "activity_level": "moderate",  # Could be from user profile
             "use_web_research": True,
         }
 
-        if health_profile:
-            user_context.update({
-                "is_pregnant": health_profile.get("is_pregnant", False),
-                "is_lactating": health_profile.get("is_lactating", False),
-                "has_anemia": health_profile.get("has_anemia", False),
-                "rdv": health_profile.get("rdv", {}),
-            })
-
+        # NEW SIGNATURE: provide_coaching(user_id, knowledge_result, user_context)
         coaching_result: CoachingResult = await asyncio.wait_for(
             coaching.provide_coaching(
+                user_id=user_id,
                 knowledge_result=knowledge_result,
                 user_context=user_context,
             ),
@@ -263,11 +266,24 @@ async def handle_user_request(
             )
 
         # Pass to coaching for answer formatting
+        # NOTE: For nutrition queries, we need user_id for personalized coaching
         coaching = _get_agent("coaching")
-        coaching_result: CoachingResult = await coaching.provide_coaching(
-            knowledge_result=knowledge_result,
-            user_context={"use_web_research": True, "query": user_message},
-        )
+
+        if user_id:
+            # Personalized coaching with user stats
+            coaching_result: CoachingResult = await coaching.provide_coaching(
+                user_id=user_id,
+                knowledge_result=knowledge_result,
+                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+            )
+        else:
+            # Fallback: Use deprecated method without user_id
+            logger.warning("No user_id provided for nutrition_query - using deprecated coaching")
+            coaching_result: CoachingResult = await coaching.provide_coaching(
+                user_id="anonymous",  # Use anonymous user_id
+                knowledge_result=knowledge_result,
+                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+            )
 
         return {
             "workflow": "nutrition_query",
@@ -280,18 +296,38 @@ async def handle_user_request(
         logger.info("   Pipeline: Coaching")
 
         coaching = _get_agent("coaching")
-        coaching_result: CoachingResult = await coaching.provide_coaching(
-            knowledge_result=KnowledgeResult(
-                foods=[],
-                total_calories=0.0,
-                total_protein=0.0,
-                total_iron=0.0,
-                total_calcium=0.0,
-                query_interpretation=user_message,
-                sources_used=[],
-            ),
-            user_context={"use_web_research": True, "query": user_message},
-        )
+
+        if user_id:
+            # Personalized coaching with user stats
+            coaching_result: CoachingResult = await coaching.provide_coaching(
+                user_id=user_id,
+                knowledge_result=KnowledgeResult(
+                    foods=[],
+                    total_calories=0.0,
+                    total_protein=0.0,
+                    total_iron=0.0,
+                    total_calcium=0.0,
+                    query_interpretation=user_message,
+                    sources_used=[],
+                ),
+                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+            )
+        else:
+            # Fallback: Use anonymous user
+            logger.warning("No user_id provided for general chat - using anonymous coaching")
+            coaching_result: CoachingResult = await coaching.provide_coaching(
+                user_id="anonymous",
+                knowledge_result=KnowledgeResult(
+                    foods=[],
+                    total_calories=0.0,
+                    total_protein=0.0,
+                    total_iron=0.0,
+                    total_calcium=0.0,
+                    query_interpretation=user_message,
+                    sources_used=[],
+                ),
+                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+            )
 
         return {
             "workflow": triage_result.workflow,

@@ -23,6 +23,17 @@ from .meal_operations import (
     get_meals_by_date,
     get_daily_nutrition_totals,
 )
+from .stats_operations import (
+    get_user_stats,
+    initialize_user_stats,
+    update_user_stats,
+    get_user_food_frequency,
+    update_food_frequency,
+    reset_weekly_food_frequency,
+    log_recommendation,
+    mark_recommendation_followed,
+    get_recommendation_stats,
+)
 
 __all__ = [
     # Database setup
@@ -42,4 +53,15 @@ __all__ = [
     "get_user_meals",
     "get_meals_by_date",
     "get_daily_nutrition_totals",
+
+    # Stats operations
+    "get_user_stats",
+    "initialize_user_stats",
+    "update_user_stats",
+    "get_user_food_frequency",
+    "update_food_frequency",
+    "reset_weekly_food_frequency",
+    "log_recommendation",
+    "mark_recommendation_followed",
+    "get_recommendation_stats",
 ]

@@ -136,6 +136,119 @@ async def initialize_database(db_path: Optional[Path] = None) -> None:
             ON daily_nutrients(user_id, date)
         """)
 
+        # =====================================================================
+        # Coaching System Tables
+        # =====================================================================
+
+        # User nutrition statistics (pre-computed for performance)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_nutrition_stats (
+                user_id TEXT PRIMARY KEY,
+
+                -- Learning Phase Tracking
+                total_meals_logged INTEGER DEFAULT 0,
+                account_age_days INTEGER DEFAULT 0,
+                learning_phase_complete BOOLEAN DEFAULT 0,
+
+                -- Streak Tracking
+                current_logging_streak INTEGER DEFAULT 0,
+                longest_logging_streak INTEGER DEFAULT 0,
+                last_logged_date TEXT,
+
+                -- Week 1 Averages (Last 7 days)
+                week1_avg_calories REAL DEFAULT 0,
+                week1_avg_protein REAL DEFAULT 0,
+                week1_avg_carbs REAL DEFAULT 0,
+                week1_avg_fat REAL DEFAULT 0,
+                week1_avg_iron REAL DEFAULT 0,
+                week1_avg_calcium REAL DEFAULT 0,
+                week1_avg_vitamin_a REAL DEFAULT 0,
+                week1_avg_zinc REAL DEFAULT 0,
+
+                -- Week 2 Averages (8-14 days ago, for comparison)
+                week2_avg_calories REAL DEFAULT 0,
+                week2_avg_protein REAL DEFAULT 0,
+                week2_avg_carbs REAL DEFAULT 0,
+                week2_avg_fat REAL DEFAULT 0,
+                week2_avg_iron REAL DEFAULT 0,
+                week2_avg_calcium REAL DEFAULT 0,
+                week2_avg_vitamin_a REAL DEFAULT 0,
+                week2_avg_zinc REAL DEFAULT 0,
+
+                -- Nutrient Trends (improving, declining, stable)
+                calories_trend TEXT DEFAULT 'stable',
+                protein_trend TEXT DEFAULT 'stable',
+                carbs_trend TEXT DEFAULT 'stable',
+                fat_trend TEXT DEFAULT 'stable',
+                iron_trend TEXT DEFAULT 'stable',
+                calcium_trend TEXT DEFAULT 'stable',
+                vitamin_a_trend TEXT DEFAULT 'stable',
+                zinc_trend TEXT DEFAULT 'stable',
+
+                -- Last Calculated
+                last_calculated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+
+        # User food frequency tracking
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_food_frequency (
+                user_id TEXT NOT NULL,
+                food_name TEXT NOT NULL,
+
+                -- Frequency Counts
+                count_7d INTEGER DEFAULT 0,        -- Last 7 days
+                count_total INTEGER DEFAULT 0,      -- All time
+
+                -- Last Eaten
+                last_eaten_date TEXT,
+
+                -- Average Nutrition (when eaten)
+                avg_iron_per_serving REAL DEFAULT 0,
+                avg_protein_per_serving REAL DEFAULT 0,
+                avg_calories_per_serving REAL DEFAULT 0,
+
+                -- Categorization
+                food_category TEXT,
+
+                PRIMARY KEY (user_id, food_name),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_food_frequency_7d
+            ON user_food_frequency(user_id, count_7d DESC)
+        """)
+
+        # User recommendation tracking
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_recommendation_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                recommended_food TEXT NOT NULL,
+                recommendation_date TEXT NOT NULL,
+
+                -- Response Tracking
+                followed BOOLEAN DEFAULT 0,
+                followed_date TEXT,
+                days_to_follow INTEGER,
+
+                -- Recommendation Details
+                recommendation_tier TEXT,
+                target_nutrient TEXT,
+
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_recommendations
+            ON user_recommendation_responses(user_id, recommendation_date DESC)
+        """)
+
         await db.commit()
         logger.info("✓ Database tables created successfully")
 
@@ -179,7 +292,10 @@ async def reset_database(db_path: Optional[Path] = None) -> None:
     logger.warning(f"⚠️ Resetting database at: {path}")
 
     async with aiosqlite.connect(path) as db:
-        # Drop all tables
+        # Drop all tables (coaching tables first due to foreign keys)
+        await db.execute("DROP TABLE IF EXISTS user_recommendation_responses")
+        await db.execute("DROP TABLE IF EXISTS user_food_frequency")
+        await db.execute("DROP TABLE IF EXISTS user_nutrition_stats")
         await db.execute("DROP TABLE IF EXISTS daily_nutrients")
         await db.execute("DROP TABLE IF EXISTS meal_foods")
         await db.execute("DROP TABLE IF EXISTS meals")
