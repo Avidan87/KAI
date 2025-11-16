@@ -415,11 +415,27 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         # Build context for GPT-4o
         foods_eaten = [food.name for food in knowledge_result.foods]
+        if not foods_eaten and user_context is not None and 'vision_foods' in user_context:
+            # Fallback to vision agent's detected foods only if no foods in knowledge
+            foods_eaten = user_context['vision_foods']
+
         food_list = ", ".join(foods_eaten)
 
-        # Build system prompt
+        # Classify current meal quality
+        meal_quality, high_nutrients, low_nutrients = self._classify_meal_quality(
+            knowledge_result, user_rdv
+        )
+        logger.info(f"   Meal quality: {meal_quality} | High: {list(high_nutrients.keys())} | Low: {list(low_nutrients.keys())}")
+
+        # Detect poor meal streak pattern
+        poor_meal_count, streak_status = await self._detect_poor_meal_streak(user_id)
+        if streak_status != "normal":
+            logger.warning(f"   ⚠️  Poor meal pattern detected: {poor_meal_count}/3 meals were poor ({streak_status})")
+
+        # Build system prompt with meal quality context
         system_prompt = self._build_dynamic_coaching_prompt(
             food_list=food_list,
+            knowledge_result=knowledge_result,
             user_rdv=user_rdv,
             week1_averages=week1_averages,
             trends=trends,
@@ -429,7 +445,12 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             total_meals=total_meals,
             current_streak=current_streak,
             food_frequency=food_frequency,
-            budget=user_context.get("budget", "mid")
+            budget=user_context.get("budget", "mid"),
+            meal_quality=meal_quality,
+            high_nutrients=high_nutrients,
+            low_nutrients=low_nutrients,
+            poor_meal_count=poor_meal_count,
+            streak_status=streak_status
         )
 
         # Call GPT-4o for dynamic coaching
@@ -468,6 +489,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
     def _build_dynamic_coaching_prompt(
         self,
         food_list: str,
+        knowledge_result: KnowledgeResult,
         user_rdv: Dict[str, float],
         week1_averages: Dict[str, float],
         trends: Dict[str, str],
@@ -477,9 +499,14 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         total_meals: int,
         current_streak: int,
         food_frequency: List[Dict],
-        budget: str
+        budget: str,
+        meal_quality: str,
+        high_nutrients: Dict[str, float],
+        low_nutrients: Dict[str, float],
+        poor_meal_count: int,
+        streak_status: str
     ) -> str:
-        """Build dynamic system prompt for GPT-4o coaching generation."""
+        """Build dynamic system prompt for GPT-4o coaching generation with meal quality context."""
 
         # Extract top foods user eats
         top_foods = [f["food_name"] for f in food_frequency[:5]] if food_frequency else []
@@ -528,6 +555,23 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 - Foods user eats often: {top_foods_str}
 - Current meal: {food_list}
 
+**Current Meal Nutrition (What User Just Logged):**
+This meal contains:
+- Calories: {knowledge_result.total_calories:.0f} kcal ({(knowledge_result.total_calories/user_rdv.get('calories',2500)*100):.0f}% of daily {user_rdv.get('calories',0):.0f} kcal)
+- Protein: {knowledge_result.total_protein:.1f}g ({(knowledge_result.total_protein/user_rdv.get('protein',60)*100):.0f}% of daily {user_rdv.get('protein',0):.1f}g)
+- Carbs: {knowledge_result.total_carbohydrates:.1f}g ({(knowledge_result.total_carbohydrates/user_rdv.get('carbs',325)*100):.0f}% of daily {user_rdv.get('carbs',0):.1f}g)
+- Fat: {knowledge_result.total_fat:.1f}g ({(knowledge_result.total_fat/user_rdv.get('fat',70)*100):.0f}% of daily {user_rdv.get('fat',0):.1f}g)
+- Iron: {knowledge_result.total_iron:.1f}mg ({(knowledge_result.total_iron/user_rdv.get('iron',18)*100):.0f}% of daily {user_rdv.get('iron',0):.1f}mg)
+- Calcium: {knowledge_result.total_calcium:.1f}mg ({(knowledge_result.total_calcium/user_rdv.get('calcium',1000)*100):.0f}% of daily {user_rdv.get('calcium',0):.1f}mg)
+- Vitamin A: {knowledge_result.total_vitamin_a:.1f}mcg ({(knowledge_result.total_vitamin_a/user_rdv.get('vitamin_a',800)*100):.0f}% of daily {user_rdv.get('vitamin_a',0):.1f}mcg)
+- Zinc: {knowledge_result.total_zinc:.1f}mg ({(knowledge_result.total_zinc/user_rdv.get('zinc',8)*100):.0f}% of daily {user_rdv.get('zinc',0):.1f}mg)
+
+**Meal Quality Assessment:**
+- Quality: {meal_quality.upper()}
+- High Nutrients (>40% RDV): {', '.join([f"{k} ({v:.0f}%)" for k, v in high_nutrients.items()]) if high_nutrients else 'None'}
+- Low Nutrients (<20% RDV): {', '.join([f"{k} ({v:.0f}%)" for k, v in low_nutrients.items()]) if low_nutrients else 'None'}
+- Recent Pattern: {poor_meal_count}/3 recent meals were poor quality (Status: {streak_status.upper()})
+
 **Personalized RDV (Recommended Daily Values):**
 - Calories: {user_rdv.get('calories', 0):.0f} kcal
 - Protein: {user_rdv.get('protein', 0):.1f}g
@@ -558,43 +602,136 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 **Primary Focus:** {primary_gap.upper()}
 
 **Your Task:**
-Generate a JSON response with the following structure:
+Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
 {{
-    "personalized_message": "Warm, personalized message (2-3 sentences) celebrating what they ate and providing context-aware guidance. Reference specific foods and trends if applicable.",
-    "nutrient_insights": [
-        {{
-            "nutrient": "iron",
-            "current_value": 8.5,
-            "recommended_daily_value": 18.0,
-            "percentage_met": 47.2,
-            "status": "deficient" | "adequate" | "optimal",
-            "advice": "Specific advice for this nutrient"
-        }},
-        // Include insights for PRIMARY GAP + top 2-3 other important nutrients
-    ],
-    "meal_suggestions": [],  // Empty for now (Phase 5)
-    "motivational_tip": "Encouraging tip based on their progress and phase",
+    "personalized_message": "3-4 sentence message that MUST include:
+        1. Opening celebration/acknowledgment with emojis 🎉
+        2. Nutrient overview highlighting 2-3 HIGH nutrients from current meal with percentages and emojis
+        3. Mention 1-2 LOW nutrients from current meal (if any) - tone depends on quality and phase
+        4. Closing encouragement or action item
+
+        Emoji Guide (USE THESE):
+        - 🎉 celebrations
+        - ⚡ energy/calories
+        - 💪 protein
+        - 🍚 carbs
+        - 🥑 healthy fats
+        - 🩸 iron
+        - 🦴 calcium
+        - 👁️ vitamin A
+        - ✨ zinc
+
+        TONE BASED ON MEAL QUALITY AND PHASE:
+        {self._get_tone_instructions(meal_quality, streak_status, is_learning_phase)}",
+
+    "motivational_tip": "Short encouraging tip with emojis. Include streak celebration if relevant (e.g., '5-day streak! 🔥'). Max 1-2 sentences.",
+
     "next_steps": [
-        "Actionable step 1 (specific to primary gap)",
-        "Actionable step 2 (budget-aware)",
-        "Actionable step 3 (logging reminder)"
-    ],
-    "tone": "encouraging"
+        "Simple actionable step related to meal quality or primary gap (with emoji)",
+        "Budget-aware food suggestion (with emoji)",
+        "Logging encouragement or streak reminder (with emoji)"
+    ]
 }}
 
+**IMPORTANT - DO NOT INCLUDE:**
+- ❌ nutrient_insights array (redundant - already in personalized_message)
+- ❌ meal_suggestions (not needed for quick logging)
+- ❌ Research paper citations or sources
+- ❌ tone field
+
 **Guidelines:**
-1. Be warm, supportive, and culturally aware
-2. Use Nigerian food names and context
-3. Reference user's actual history (foods they eat, trends)
-4. Celebrate improvements and streaks
-5. For learning phase: Be gentle and educational
-6. For post-learning: Be specific and actionable
-7. Keep messages concise and practical
+1. USE EMOJIS LIBERALLY throughout all fields (personalized_message, motivational_tip, next_steps)
+2. Be warm, supportive, and culturally aware
+3. Use Nigerian food names and context
+4. ALWAYS include nutrient overview in personalized_message (what meal is HIGH in, what it LACKS)
+5. Reference user's actual history (foods they eat, trends) when relevant
+6. Celebrate improvements and streaks in motivational_tip
+7. Keep ALL messages concise (personalized_message: 3-4 sentences, motivational_tip: 1-2 sentences, next_steps: 3 simple items)
 8. Focus on budget-aware recommendations ({budget} budget)
+9. Adjust tone based on meal quality (see tone instructions above)
+10. next_steps should be SIMPLE actions, NO research citations
 
 Generate the JSON now:"""
 
         return prompt
+
+    def _get_tone_instructions(self, meal_quality: str, streak_status: str, is_learning_phase: bool) -> str:
+        """Generate tone instructions based on meal quality and user phase."""
+
+        if streak_status == "intervention":
+            # 3 poor meals in a row - STRICT intervention needed
+            return """
+            🚨 STRICT INTERVENTION TONE (3 poor meals detected):
+            - Be FIRM and DIRECT about the concern
+            - Start with: "We need to talk" or "I'm concerned"
+            - Show specific nutrient deficits with numbers
+            - Explain health risks (anemia, weak bones, etc.)
+            - Demand immediate action: "Let's get back on track TODAY"
+            - End with accountability question: "Can you commit to..."
+            - Example: "We need to talk. 🛑 You've logged 3 poor meals in a row (biscuits, doughnuts, soft drinks). Your protein is only 8g/day vs your 60g target - this will cause muscle loss and fatigue. You need to eat a proper Nigerian meal TODAY: Jollof Rice with Chicken, or Beans and Plantain. Can you commit to this?"
+            """
+
+        elif streak_status == "warning":
+            # 2 poor meals in last 3 - Warning tone
+            return """
+            ⚠️ WARNING TONE (2/3 recent meals were poor):
+            - Be concerned but supportive
+            - Acknowledge the pattern: "I've noticed..."
+            - Show the nutrient impact
+            - Provide clear next steps
+            - Example: "I've noticed you've been logging mostly snacks lately (2 of your last 3 meals). ⚠️ This is affecting your nutrition - protein is down to 15g/day. Let's refocus! Try adding a proper meal like Egusi Soup or Jollof Rice with protein for your next meal. You were doing great before!"
+            """
+
+        elif meal_quality == "poor" and not is_learning_phase:
+            # Single poor meal, post-learning phase - Corrective but not harsh
+            return """
+            ⚠️ CORRECTIVE TONE (single poor meal, post-learning):
+            - Acknowledge what they logged without judgment
+            - Explain WHY it's not ideal (specific nutrient gaps)
+            - Suggest better alternatives
+            - Example: "I see you logged a doughnut and soft drink. This meal is very low in protein (3g - 5%), iron (1mg - 6%), and calcium (2%) 🦴. It's mostly empty calories. Consider adding groundnuts for protein, or next time try Puff Puff with milk - still sweet but more nutritious! 💡"
+            """
+
+        elif meal_quality == "poor" and is_learning_phase:
+            # Poor meal during learning phase - Gentle education
+            return """
+            💡 GENTLE EDUCATIONAL TONE (poor meal, learning phase):
+            - Be kind and educational, not prescriptive
+            - Acknowledge the meal positively
+            - Gently explain nutrient content
+            - End with encouragement
+            - Example: "Thanks for logging your snack! 😊 This meal is high in calories but low in protein (5%), iron (4%), and calcium (3%). That's okay - you're learning what different foods contain! As KAI learns your patterns, we'll work together to balance nutrition and enjoyment. Keep logging! 🌟"
+            """
+
+        elif meal_quality == "excellent":
+            # Excellent meal - Celebrate!
+            return """
+            🎉 CELEBRATORY TONE (excellent meal):
+            - Be enthusiastic and celebratory!
+            - Highlight all the HIGH nutrients with excitement
+            - Encourage continuation
+            - Example: "Excellent choice! 🎉 This meal is a nutrient powerhouse! Packed with protein (45g - 75%) 💪, iron (8mg - 44%) 🩸, and vitamin A (65%) 👁️. You're nourishing your body perfectly! Keep up this amazing work! 🌟"
+            """
+
+        elif meal_quality == "good":
+            # Good meal - Positive and encouraging
+            return """
+            😊 ENCOURAGING TONE (good meal):
+            - Be positive and supportive
+            - Highlight the HIGH nutrients
+            - Gently mention what could be better (if relevant)
+            - Example: "Great job logging! 🎉 This meal is rich in protein (35g - 58%) 💪 and vitamin A (520mcg - 65%) 👁️. It's a bit low in calcium (9%) 🦴 - consider adding yogurt or milk next time. Overall, great choice! Keep it up!"
+            """
+
+        else:  # meal_quality == "okay"
+            # Okay meal - Supportive with suggestions
+            return """
+            💪 SUPPORTIVE TONE (okay meal):
+            - Be supportive and constructive
+            - Acknowledge what's good
+            - Suggest simple improvements
+            - Example: "Nice logging! 😊 This meal provides decent energy (calories 25%) ⚡ and some protein (20%) 💪. To make it even better, add some vegetables (for vitamin A 👁️) or dairy (for calcium 🦴). Small additions make a big difference!"
+            """
 
     def _fallback_coaching(
         self,
@@ -604,41 +741,32 @@ Generate the JSON now:"""
         gaps: Dict[str, Dict],
         user_rdv: Dict[str, float]
     ) -> Dict[str, Any]:
-        """Simple fallback coaching if GPT-4o fails."""
+        """Simplified fallback coaching if GPT-4o fails."""
         logger.warning("Using fallback coaching template")
 
         if is_learning_phase:
-            message = f"Great job logging your meal: {food_list}! Keep tracking your meals to help me learn your eating patterns."
-            tip = "You're building a healthy habit by logging your meals. Consistency is key!"
+            message = f"Great job logging your meal: {food_list}! 🎉 Keep tracking your meals to help KAI learn your eating patterns."
+            tip = "You're building a healthy habit by logging your meals. Consistency is key! 🌟"
+            steps = [
+                "Log your next meal to continue building your profile 📝",
+                "Keep exploring different Nigerian dishes 🍽️",
+                "Celebrate your consistency! 🎉"
+            ]
         else:
             gap_data = gaps.get(primary_gap, {})
-            message = f"Thanks for logging {food_list}. Your {primary_gap} intake could use attention - you're at {gap_data.get('percent_met', 0):.0f}% of your daily goal."
-            tip = f"Focus on adding {primary_gap}-rich Nigerian foods to boost your nutrition."
+            message = f"Thanks for logging {food_list}! 😊 Your {primary_gap} intake could use attention - you're at {gap_data.get('percent_met', 0):.0f}% of your daily goal."
+            tip = f"Focus on adding {primary_gap}-rich Nigerian foods to boost your nutrition 💪"
+            steps = [
+                f"Add {primary_gap}-rich foods to your next meal 🥗",
+                "Keep logging to track your progress 📊",
+                "Stay consistent with your meal tracking! 🔥"
+            ]
 
-        # Generate insights for top 3 nutrients
-        insights = []
-        for nutrient in list(gaps.keys())[:3]:
-            data = gaps[nutrient]
-            insights.append({
-                "nutrient": nutrient,
-                "current_value": data["current"],
-                "recommended_daily_value": data["target"],
-                "percentage_met": data["percent_met"],
-                "status": "deficient" if data["percent_met"] < 70 else "adequate",
-                "advice": f"Aim for {data['target']:.1f} per day. You're currently at {data['current']:.1f}."
-            })
-
+        # Simplified response (no nutrient_insights, no meal_suggestions)
         return {
             "personalized_message": message,
-            "nutrient_insights": insights,
-            "meal_suggestions": [],
             "motivational_tip": tip,
-            "next_steps": [
-                f"Add {primary_gap}-rich foods to your next meal",
-                "Log your next meal to track progress",
-                "Keep up your logging streak!"
-            ],
-            "tone": "encouraging"
+            "next_steps": steps
         }
 
     def _tool_generate_nutrition_insights(
@@ -825,6 +953,16 @@ Generate the JSON now:"""
 
         return json.dumps(result)
 
+    def _food_list_phrase(self, foods: List[str]) -> str:
+        # Helper to produce natural food enumeration
+        if not foods:
+            return "your meal"
+        if len(foods) == 1:
+            return foods[0]
+        if len(foods) == 2:
+            return f"{foods[0]} and {foods[1]}"
+        return f"{', '.join(foods[:-1])}, and {foods[-1]}"
+
     def _generate_personalized_message(
         self,
         foods_eaten: List[str],
@@ -832,7 +970,7 @@ Generate the JSON now:"""
         is_pregnant: bool
     ) -> str:
         """Generate a warm, personalized message based on the meal."""
-        food_list = ", ".join(foods_eaten)
+        intro = f"🎉 Great job logging your {self._food_list_phrase(foods_eaten)}! "
 
         # Find the nutrient with best status
         good_nutrients = [
@@ -846,13 +984,7 @@ Generate the JSON now:"""
             if ni["status"] == "deficient"
         ]
 
-        message_parts = []
-
-        # Opening - celebrate what they ate
-        message_parts.append(
-            f"Thank you for logging your meal: {food_list}! "
-            "I'm here to help you make the most of your nutrition journey."
-        )
+        message_parts = [intro]
 
         # Celebrate strengths
         if good_nutrients:
@@ -1156,6 +1288,128 @@ Generate the JSON now:"""
             tone=result_dict.get("tone", "encouraging")
         )
 
+    def _classify_meal_quality(
+        self,
+        knowledge_result: KnowledgeResult,
+        user_rdv: Dict[str, float]
+    ) -> tuple[str, Dict[str, float], Dict[str, float]]:
+        """
+        Classify meal quality based on nutrient content.
+
+        Returns:
+            (quality, high_nutrients, low_nutrients)
+            quality: "excellent" | "good" | "okay" | "poor"
+            high_nutrients: Dict of nutrients >40% RDV with their percentages
+            low_nutrients: Dict of nutrients <20% RDV with their percentages
+        """
+        # Calculate nutrient percentages for current meal
+        nutrient_percentages = {
+            'calories': (knowledge_result.total_calories / user_rdv.get('calories', 2500)) * 100,
+            'protein': (knowledge_result.total_protein / user_rdv.get('protein', 60)) * 100,
+            'carbohydrates': (knowledge_result.total_carbohydrates / user_rdv.get('carbs', 325)) * 100,
+            'fat': (knowledge_result.total_fat / user_rdv.get('fat', 70)) * 100,
+            'iron': (knowledge_result.total_iron / user_rdv.get('iron', 18)) * 100,
+            'calcium': (knowledge_result.total_calcium / user_rdv.get('calcium', 1000)) * 100,
+            'vitamin_a': (knowledge_result.total_vitamin_a / user_rdv.get('vitamin_a', 800)) * 100,
+            'zinc': (knowledge_result.total_zinc / user_rdv.get('zinc', 8)) * 100,
+        }
+
+        # Identify high nutrients (>40% RDV)
+        high_nutrients = {k: v for k, v in nutrient_percentages.items() if v >= 40}
+
+        # Identify low nutrients (<20% RDV)
+        low_nutrients = {k: v for k, v in nutrient_percentages.items() if v < 20}
+
+        # Classify quality
+        protein_pct = nutrient_percentages['protein']
+        high_count = len(high_nutrients)
+        low_count = len(low_nutrients)
+
+        if protein_pct >= 30 and high_count >= 3:
+            quality = "excellent"  # High protein + 3+ nutrients above 40%
+        elif high_count >= 2:
+            quality = "good"  # 2+ nutrients above 40%
+        elif low_count >= 5 and protein_pct < 15:
+            quality = "poor"  # 5+ nutrients below 20% AND low protein
+        else:
+            quality = "okay"  # Everything else
+
+        return quality, high_nutrients, low_nutrients
+
+    async def _detect_poor_meal_streak(self, user_id: str) -> tuple[int, str]:
+        """
+        Detect if user has logged multiple poor quality meals in a row.
+
+        Returns:
+            (poor_count, streak_status)
+            poor_count: Number of poor meals in last 3
+            streak_status: "normal" | "warning" | "intervention"
+        """
+        from kai.database import get_user_meals
+
+        try:
+            # Get last 3 meals
+            recent_meals = await get_user_meals(user_id, limit=3)
+
+            if not recent_meals:
+                return 0, "normal"
+
+            poor_count = 0
+            for meal in recent_meals:
+                # Calculate total nutrients for this meal
+                meal_totals = {
+                    'calories': 0, 'protein': 0, 'carbohydrates': 0, 'fat': 0,
+                    'iron': 0, 'calcium': 0, 'vitamin_a': 0, 'zinc': 0
+                }
+
+                for food in meal.get('foods', []):
+                    meal_totals['calories'] += food.get('calories', 0)
+                    meal_totals['protein'] += food.get('protein', 0)
+                    meal_totals['carbohydrates'] += food.get('carbohydrates', 0)
+                    meal_totals['fat'] += food.get('fat', 0)
+                    meal_totals['iron'] += food.get('iron', 0)
+                    meal_totals['calcium'] += food.get('calcium', 0)
+                    meal_totals['vitamin_a'] += food.get('vitamin_a', 0)
+                    meal_totals['zinc'] += food.get('zinc', 0)
+
+                # Create temporary KnowledgeResult to classify
+                from kai.models import KnowledgeResult
+                temp_knowledge = KnowledgeResult(
+                    foods=[],
+                    total_calories=meal_totals['calories'],
+                    total_protein=meal_totals['protein'],
+                    total_carbohydrates=meal_totals['carbohydrates'],
+                    total_fat=meal_totals['fat'],
+                    total_iron=meal_totals['iron'],
+                    total_calcium=meal_totals['calcium'],
+                    total_vitamin_a=meal_totals['vitamin_a'],
+                    total_zinc=meal_totals['zinc'],
+                    query_interpretation="",
+                    sources_used=[]
+                )
+
+                # Classify meal (use default RDV for classification)
+                from kai.utils import calculate_user_rdv
+                default_rdv = calculate_user_rdv({"gender": "female", "age": 25, "activity_level": "moderate"})
+                meal_quality, _, _ = self._classify_meal_quality(temp_knowledge, default_rdv)
+
+                if meal_quality == "poor":
+                    poor_count += 1
+
+            # Determine streak status
+            if poor_count >= 3:
+                streak_status = "intervention"  # All 3 were poor - serious concern
+            elif poor_count >= 2:
+                streak_status = "warning"  # 2+ poor meals - concerning pattern
+            else:
+                streak_status = "normal"
+
+            return poor_count, streak_status
+
+        except Exception as e:
+            logger.warning(f"Could not detect poor meal streak: {e}")
+            return 0, "normal"
+
 
 # ============================================================================
 # Convenience Functions
@@ -1266,6 +1520,7 @@ if __name__ == "__main__":
         print("-"*60)
 
         result = await agent.provide_coaching(
+            user_id="test_user_123", # Added user_id for testing
             knowledge_result=sample_knowledge_result,
             user_context={"is_pregnant": False, "budget": "mid"}
         )
@@ -1293,6 +1548,7 @@ if __name__ == "__main__":
         print("-"*60)
 
         result_pregnant = await agent.provide_coaching(
+            user_id="test_user_123", # Added user_id for testing
             knowledge_result=sample_knowledge_result,
             user_context={"is_pregnant": True, "budget": "low"}
         )

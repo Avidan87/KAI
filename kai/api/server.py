@@ -182,9 +182,16 @@ async def food_logging_upload(
         )
 
         knowledge: KnowledgeResult | None = result.get("nutrition")
+
+        # Extract ALL 8 NUTRIENTS from knowledge result
         total_calories = getattr(knowledge, "total_calories", 0.0) if knowledge else 0.0
         total_protein = getattr(knowledge, "total_protein", 0.0) if knowledge else 0.0
+        total_carbohydrates = getattr(knowledge, "total_carbohydrates", 0.0) if knowledge else 0.0
+        total_fat = getattr(knowledge, "total_fat", 0.0) if knowledge else 0.0
         total_iron = getattr(knowledge, "total_iron", 0.0) if knowledge else 0.0
+        total_calcium = getattr(knowledge, "total_calcium", 0.0) if knowledge else 0.0
+        total_vitamin_a = getattr(knowledge, "total_vitamin_a", 0.0) if knowledge else 0.0
+        total_zinc = getattr(knowledge, "total_zinc", 0.0) if knowledge else 0.0
 
         return FoodLoggingResponse(
             success=True,
@@ -192,9 +199,16 @@ async def food_logging_upload(
             detected_foods=result.get("vision").detected_foods if result.get("vision") else [],
             nutrition_data=knowledge,
             coaching=result.get("coaching"),
+            midas_used=result.get('vision').midas_used if result.get('vision') else False,
+            # Return ALL 8 nutrients
             total_calories=total_calories,
             total_protein=total_protein,
+            total_carbohydrates=total_carbohydrates,
+            total_fat=total_fat,
             total_iron=total_iron,
+            total_calcium=total_calcium,
+            total_vitamin_a=total_vitamin_a,
+            total_zinc=total_zinc,
             processing_time_ms=int((time.time() - start) * 1000),
             workflow_path=result.get("workflow", "food_logging"),
         )

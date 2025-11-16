@@ -229,10 +229,15 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
             raise ValueError("food_names and portions_grams must have same length")
 
         foods_data = []
+        # Initialize ALL 8 NUTRIENT totals
         total_calories = 0.0
         total_protein = 0.0
+        total_carbohydrates = 0.0
+        total_fat = 0.0
         total_iron = 0.0
         total_calcium = 0.0
+        total_vitamin_a = 0.0
+        total_zinc = 0.0
 
         async def search_one(food_name: str, portion_g: float):
             logger.info(f"   Searching: {food_name} ({portion_g}g)")
@@ -273,10 +278,15 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
                 for key, value in nutrients_per_100g.items()
             }
 
+            # Accumulate ALL 8 NUTRIENTS
             total_calories += total_nutrients["calories"]
             total_protein += total_nutrients["protein"]
+            total_carbohydrates += total_nutrients["carbohydrates"]
+            total_fat += total_nutrients["fat"]
             total_iron += total_nutrients["iron"]
             total_calcium += total_nutrients["calcium"]
+            total_vitamin_a += total_nutrients["vitamin_a"]
+            total_zinc += total_nutrients["zinc"]
 
             dietary_flags_str = metadata.get("dietary_flags", "")
             dietary_flags = [f.strip() for f in dietary_flags_str.split(",") if f.strip()]
@@ -303,13 +313,17 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
                 f"(similarity: {food_data['similarity_score']:.2f})"
             )
 
-        # Build result
+        # Build result with ALL 8 NUTRIENTS
         result = {
             "foods": foods_data,
             "total_calories": total_calories,
             "total_protein": total_protein,
+            "total_carbohydrates": total_carbohydrates,
+            "total_fat": total_fat,
             "total_iron": total_iron,
             "total_calcium": total_calcium,
+            "total_vitamin_a": total_vitamin_a,
+            "total_zinc": total_zinc,
             "query_interpretation": f"Retrieved {len(foods_data)}/{len(food_names)} foods",
             "sources_used": ["ChromaDB Nigerian Foods Collection"]
         }
@@ -317,7 +331,12 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
         logger.info(
             f"   📊 Totals: {total_calories:.0f} cal | "
             f"{total_protein:.1f}g protein | "
-            f"{total_iron:.1f}mg iron"
+            f"{total_carbohydrates:.1f}g carbs | "
+            f"{total_fat:.1f}g fat | "
+            f"{total_iron:.1f}mg iron | "
+            f"{total_calcium:.1f}mg calcium | "
+            f"{total_vitamin_a:.1f}mcg vitamin A | "
+            f"{total_zinc:.1f}mg zinc"
         )
 
         return json.dumps(result)
@@ -402,10 +421,15 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
 
         return KnowledgeResult(
             foods=foods,
+            # ALL 8 NUTRIENTS
             total_calories=result_dict.get("total_calories", 0.0),
             total_protein=result_dict.get("total_protein", 0.0),
+            total_carbohydrates=result_dict.get("total_carbohydrates", 0.0),
+            total_fat=result_dict.get("total_fat", 0.0),
             total_iron=result_dict.get("total_iron", 0.0),
             total_calcium=result_dict.get("total_calcium", 0.0),
+            total_vitamin_a=result_dict.get("total_vitamin_a", 0.0),
+            total_zinc=result_dict.get("total_zinc", 0.0),
             query_interpretation=result_dict.get("query_interpretation", ""),
             sources_used=result_dict.get("sources_used", [])
         )

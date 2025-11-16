@@ -62,6 +62,8 @@ class VisionResult(BaseModel):
     overall_confidence: float = Field(ge=0.0, le=1.0)
     needs_clarification: bool = False
     clarification_questions: List[str] = Field(default_factory=list)
+    image_quality_issue: bool = False
+    midas_used: bool  # True if MiDaS MCP was used, False if fallback was used
 
 
 # ============================================================================
@@ -99,10 +101,15 @@ class FoodNutritionData(BaseModel):
 class KnowledgeResult(BaseModel):
     """Result from Knowledge Agent RAG lookup"""
     foods: List[FoodNutritionData]
+    # ALL 8 NUTRIENTS - KAI tracks complete nutrition profile
     total_calories: float
     total_protein: float
+    total_carbohydrates: float
+    total_fat: float
     total_iron: float
     total_calcium: float
+    total_vitamin_a: float
+    total_zinc: float
     query_interpretation: str
     sources_used: List[str] = Field(default_factory=list)
 
@@ -132,12 +139,13 @@ class MealSuggestion(BaseModel):
 
 
 class CoachingResult(BaseModel):
-    """Result from Coaching Agent"""
+    """Result from Coaching Agent - Simplified for food logging"""
     personalized_message: str
-    nutrient_insights: List[NutrientInsight] = Field(default_factory=list)
-    meal_suggestions: List[MealSuggestion] = Field(default_factory=list)
     motivational_tip: str
     next_steps: List[str] = Field(default_factory=list)
+    # Optional fields (not used for food logging, but kept for stats/query endpoints)
+    nutrient_insights: List[NutrientInsight] = Field(default_factory=list)
+    meal_suggestions: List[MealSuggestion] = Field(default_factory=list)
     tone: Literal["encouraging", "celebratory", "educational", "supportive"] = "encouraging"
 
 
@@ -152,9 +160,16 @@ class FoodLoggingResponse(BaseModel):
     detected_foods: List[DetectedFood] = Field(default_factory=list)
     nutrition_data: Optional[KnowledgeResult] = None
     coaching: Optional[CoachingResult] = None
+    midas_used: bool = False  # True if MiDaS used for portion estimation, False if fallback
+    # ALL 8 NUTRIENTS - KAI is proficient in tracking all nutrients
     total_calories: float = 0.0
     total_protein: float = 0.0
+    total_carbohydrates: float = 0.0
+    total_fat: float = 0.0
     total_iron: float = 0.0
+    total_calcium: float = 0.0
+    total_vitamin_a: float = 0.0
+    total_zinc: float = 0.0
     processing_time_ms: int = 0
     workflow_path: str = ""
 

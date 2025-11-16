@@ -210,6 +210,7 @@ async def handle_user_request(
             "budget": "mid",  # Could be from user profile
             "activity_level": "moderate",  # Could be from user profile
             "use_web_research": True,
+            "vision_foods": [df.name for df in vision_result.detected_foods],
         }
 
         # NEW SIGNATURE: provide_coaching(user_id, knowledge_result, user_context)
@@ -254,13 +255,17 @@ async def handle_user_request(
                 timeout=30.0,
             )
         else:
-            # No specific foods, create empty result
+            # No specific foods, create empty result with all 8 nutrients
             knowledge_result = KnowledgeResult(
                 foods=[],
                 total_calories=0.0,
                 total_protein=0.0,
+                total_carbohydrates=0.0,
+                total_fat=0.0,
                 total_iron=0.0,
                 total_calcium=0.0,
+                total_vitamin_a=0.0,
+                total_zinc=0.0,
                 query_interpretation=user_message,
                 sources_used=[],
             )
@@ -305,8 +310,12 @@ async def handle_user_request(
                     foods=[],
                     total_calories=0.0,
                     total_protein=0.0,
+                    total_carbohydrates=0.0,
+                    total_fat=0.0,
                     total_iron=0.0,
                     total_calcium=0.0,
+                    total_vitamin_a=0.0,
+                    total_zinc=0.0,
                     query_interpretation=user_message,
                     sources_used=[],
                 ),
@@ -321,8 +330,12 @@ async def handle_user_request(
                     foods=[],
                     total_calories=0.0,
                     total_protein=0.0,
+                    total_carbohydrates=0.0,
+                    total_fat=0.0,
                     total_iron=0.0,
                     total_calcium=0.0,
+                    total_vitamin_a=0.0,
+                    total_zinc=0.0,
                     query_interpretation=user_message,
                     sources_used=[],
                 ),

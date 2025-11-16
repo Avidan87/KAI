@@ -235,16 +235,6 @@ Be specific about Nigerian dishes, not generic descriptions!"""
     ) -> VisionResult:
         """
         Analyze meal image and detect Nigerian foods.
-
-        Uses the agent's tool for vision analysis following SDK pattern.
-
-        Args:
-            image_base64: Base64 encoded image
-            user_description: Optional user description of the meal
-            meal_type: Meal type (breakfast, lunch, dinner, snack)
-
-        Returns:
-            VisionResult with detected foods and metadata
         """
         try:
             logger.info("🔍 Starting Nigerian food vision analysis (SDK mode)")
@@ -259,12 +249,12 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             # Parse tool result
             result_dict = json.loads(result_json)
 
-            # Convert to VisionResult
-            vision_result = self._parse_detection_result(result_dict)
+            midas_used = False
+            portion_grams = None
 
-            # PRIMARY: Call MiDaS MCP for accurate portion estimation
-            # MiDaS now supports both image_url and image_base64
-            if (image_url or image_base64) and vision_result.detected_foods:
+            # (We need detected_foods info for portion logic)
+            detected_foods = result_dict.get("detected_foods", [])
+            if (image_url or image_base64) and detected_foods:
                 logger.info("📏 Calling MiDaS MCP for portion estimation")
                 try:
                     portion = await get_portion_estimate(
@@ -274,36 +264,21 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                     )
                     portion_grams = portion.get("portion_grams")
                     if portion_grams and portion_grams > 0:
-                        # MiDaS provides accurate depth-based portion estimates - use as PRIMARY source
                         logger.info(f"✅ MiDaS estimated portion: {portion_grams}g per item")
-                        for food in vision_result.detected_foods:
-                            # Override GPT-4o estimates with MiDaS (more accurate for portions)
-                            food.estimated_grams = float(portion_grams)
+                        midas_used = True
+                        # Update estimated_grams in result_dict for all detected foods
+                        for food in detected_foods:
+                            food["estimated_grams"] = portion_grams
                     else:
-                        logger.warning("MiDaS returned invalid portion, keeping GPT-4o estimates")
-                except Exception as midas_err:
-                    logger.warning("MiDaS portion estimate failed: %s, falling back to GPT-4o estimates", midas_err)
-
-            logger.info(f"✅ Detected {len(vision_result.detected_foods)} Nigerian foods")
-
+                        logger.warning("⚠️ MiDaS MCP fallback: portion_grams missing or invalid")
+                except Exception as e:
+                    logger.error(f"❌ MiDaS MCP fallback: {str(e)}")
+                    midas_used = False
+            # Now, build the VisionResult from result_dict and correct midas_used
+            vision_result = self._parse_detection_result(result_dict, midas_used=midas_used)
             return vision_result
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse vision result: {e}")
-            # Fallback to empty result with clarification needed
-            return VisionResult(
-                detected_foods=[],
-                meal_context="Unable to detect foods - image may be unclear",
-                overall_confidence=0.0,
-                needs_clarification=True,
-                clarification_questions=[
-                    "Could you describe what foods are in the image?",
-                    "Is the image clear and well-lit?",
-                    "Are these Nigerian dishes?"
-                ]
-            )
-        except Exception as e:
-            logger.error(f"Vision analysis error: {e}", exc_info=True)
+        except Exception as ex:
+            logger.exception(f"VisionAgent.analyze_image failed: {str(ex)}")
             raise
 
     async def _tool_analyze_nigerian_food_image(
@@ -448,12 +423,13 @@ Be specific about Nigerian dishes, not generic descriptions!"""
 
 Be specific about Nigerian dishes, not generic descriptions!"""
 
-    def _parse_detection_result(self, result_dict: Dict[str, Any]) -> VisionResult:
+    def _parse_detection_result(self, result_dict: Dict[str, Any], midas_used: bool = False) -> VisionResult:
         """
         Parse JSON result into VisionResult model.
 
         Args:
             result_dict: Parsed JSON from GPT-4o
+            midas_used: Boolean indicating if MiDaS was used for portion estimation
 
         Returns:
             Structured VisionResult
@@ -478,7 +454,8 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             cooking_method=result_dict.get("cooking_method"),
             overall_confidence=result_dict.get("overall_confidence", 0.7),
             needs_clarification=result_dict.get("needs_clarification", False),
-            clarification_questions=result_dict.get("clarification_questions", [])
+            clarification_questions=result_dict.get("clarification_questions", []),
+            midas_used=midas_used
         )
 
     def validate_image_quality(self, image_base64: str) -> Dict[str, Any]:
