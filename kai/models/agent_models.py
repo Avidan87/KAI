@@ -184,6 +184,7 @@ class ChatResponse(BaseModel):
     follow_up_suggestions: List[str] = Field(default_factory=list)
     processing_time_ms: int = 0
     workflow_path: str = ""  # Show which workflow was used
+    tavily_used: bool = False  # Track if Tavily web research was used
 
 
 # ============================================================================

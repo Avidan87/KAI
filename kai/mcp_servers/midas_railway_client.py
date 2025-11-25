@@ -38,8 +38,9 @@ class MiDaSRailwayClient:
         # Remove trailing slash
         self.railway_url = self.railway_url.rstrip('/')
 
-        # Initialize async HTTP client
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # Initialize async HTTP client with extended timeout for depth estimation
+        # MiDaS depth estimation can take 60-90 seconds for complex images
+        self.client = httpx.AsyncClient(timeout=120.0)
 
     async def estimate_depth(
         self,

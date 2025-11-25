@@ -100,7 +100,7 @@ async def handle_user_request(
     triage = _get_agent("triage")
     triage_result = await asyncio.wait_for(
         triage.analyze_request(user_message=user_message, has_image=has_image, conversation_history=conversation_history),
-        timeout=15.0,
+        timeout=30.0,  # Increased from 15s to handle network latency and API response time
     )
     logger.info(f"   → Workflow: {triage_result.workflow} (confidence: {triage_result.confidence:.2f})")
 
@@ -116,7 +116,7 @@ async def handle_user_request(
                 image_url=image_url,
                 meal_type=None,
             ),
-            timeout=45.0,
+            timeout=150.0,  # Extended timeout: MiDaS depth estimation can take 60-90s
         )
         logger.info(f"   → Detected: {len(vision_result.detected_foods)} foods")
 
@@ -213,12 +213,13 @@ async def handle_user_request(
             "vision_foods": [df.name for df in vision_result.detected_foods],
         }
 
-        # NEW SIGNATURE: provide_coaching(user_id, knowledge_result, user_context)
+        # NEW SIGNATURE: provide_coaching(user_id, knowledge_result, user_context, workflow_type)
         coaching_result: CoachingResult = await asyncio.wait_for(
             coaching.provide_coaching(
                 user_id=user_id,
                 knowledge_result=knowledge_result,
                 user_context=user_context,
+                workflow_type="food_logging"
             ),
             timeout=45.0,
         )
@@ -274,12 +275,21 @@ async def handle_user_request(
         # NOTE: For nutrition queries, we need user_id for personalized coaching
         coaching = _get_agent("coaching")
 
+        # Create user context dict that will be modified by coaching agent
+        user_ctx = {
+            "use_web_research": True,
+            "budget": "mid",
+            "activity_level": "moderate",
+            "user_question": user_message  # Pass user's question for Tavily query
+        }
+
         if user_id:
             # Personalized coaching with user stats
             coaching_result: CoachingResult = await coaching.provide_coaching(
                 user_id=user_id,
                 knowledge_result=knowledge_result,
-                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+                user_context=user_ctx,
+                workflow_type="nutrition_query"
             )
         else:
             # Fallback: Use deprecated method without user_id
@@ -287,13 +297,18 @@ async def handle_user_request(
             coaching_result: CoachingResult = await coaching.provide_coaching(
                 user_id="anonymous",  # Use anonymous user_id
                 knowledge_result=knowledge_result,
-                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+                user_context=user_ctx,
+                workflow_type="nutrition_query"
             )
+
+        # Extract tavily_used flag from user_context (set by coaching agent)
+        tavily_used = user_ctx.get("tavily_used", False)
 
         return {
             "workflow": "nutrition_query",
             "nutrition": knowledge_result,
             "coaching": coaching_result,
+            "tavily_used": tavily_used,
         }
 
     else:
@@ -301,6 +316,15 @@ async def handle_user_request(
         logger.info("   Pipeline: Coaching")
 
         coaching = _get_agent("coaching")
+        workflow = triage_result.workflow  # "health_coaching" or "general_chat"
+
+        # Create user context dict that will be modified by coaching agent
+        user_ctx = {
+            "use_web_research": True,
+            "budget": "mid",
+            "activity_level": "moderate",
+            "user_question": user_message  # Pass user's question for Tavily query
+        }
 
         if user_id:
             # Personalized coaching with user stats
@@ -319,7 +343,8 @@ async def handle_user_request(
                     query_interpretation=user_message,
                     sources_used=[],
                 ),
-                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+                user_context=user_ctx,
+                workflow_type=workflow
             )
         else:
             # Fallback: Use anonymous user
@@ -339,12 +364,17 @@ async def handle_user_request(
                     query_interpretation=user_message,
                     sources_used=[],
                 ),
-                user_context={"use_web_research": True, "budget": "mid", "activity_level": "moderate"},
+                user_context=user_ctx,
+                workflow_type=workflow
             )
+
+        # Extract tavily_used flag from user_context (set by coaching agent)
+        tavily_used = user_ctx.get("tavily_used", False)
 
         return {
             "workflow": triage_result.workflow,
             "coaching": coaching_result,
+            "tavily_used": tavily_used,
         }
 
 

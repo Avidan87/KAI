@@ -217,7 +217,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         self,
         user_id: str,
         knowledge_result: KnowledgeResult,
-        user_context: Optional[Dict[str, Any]] = None
+        user_context: Optional[Dict[str, Any]] = None,
+        workflow_type: str = "food_logging"
     ) -> CoachingResult:
         """
         Provide personalized nutrition coaching based on user history and current meal.
@@ -227,11 +228,13 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         - Calculates personalized RDV for ALL 8 nutrients
         - Detects learning phase vs post-learning phase
         - Uses GPT-4o for dynamic coaching (no hardcoded templates!)
+        - Different prompts for different workflows (food_logging vs nutrition_query)
 
         Args:
             user_id: User ID to generate coaching for
             knowledge_result: Nutrition data from Knowledge Agent (current meal)
             user_context: Optional overrides (budget, use_web_research, etc.)
+            workflow_type: Type of workflow ("food_logging", "nutrition_query", "health_coaching", "general_chat")
 
         Returns:
             CoachingResult with dynamic insights, suggestions, and motivation
@@ -314,7 +317,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 total_meals=total_meals,
                 current_streak=current_streak,
                 food_frequency=food_frequency,
-                user_context=user_context or {}
+                user_context=user_context or {},
+                workflow_type=workflow_type
             )
 
             # Optionally enrich with Tavily MCP web research
@@ -322,16 +326,26 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             has_deficiency = any(
                 ni.get("status") == "deficient" for ni in coaching_data.get("nutrient_insights", [])
             )
+            tavily_used = False  # Track if Tavily was successfully used
 
+            # Workflow-aware Tavily enrichment
             if research_requested or has_deficiency:
-                deficient_names = [
-                    ni.get("nutrient") for ni in coaching_data.get("nutrient_insights", [])
-                    if ni.get("status") == "deficient"
-                ]
-                query = "Nigerian foods to improve " + (
-                    ", ".join(deficient_names[:2]) if deficient_names else "nutrition"
-                )
-                logger.info(f"🌐 Calling Tavily MCP for query: {query}")
+                # Build appropriate query based on workflow type
+                if workflow_type in ["nutrition_query", "health_coaching", "general_chat"]:
+                    # For queries: Use user's original question or general nutrition query
+                    query_context = user_context.get("user_question", "Nigerian nutrition information")
+                    query = query_context
+                else:
+                    # For food logging: Query about nutrient deficiencies
+                    deficient_names = [
+                        ni.get("nutrient") for ni in coaching_data.get("nutrient_insights", [])
+                        if ni.get("status") == "deficient"
+                    ]
+                    query = "Nigerian foods to improve " + (
+                        ", ".join(deficient_names[:2]) if deficient_names else "nutrition"
+                    )
+
+                logger.info(f"🌐 Calling Tavily MCP for {workflow_type}: {query}")
                 try:
                     tavily_response = await asyncio.wait_for(
                         self._call_tavily_mcp(query=query, max_results=3),
@@ -339,23 +353,41 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                     )
                     sources = tavily_response.get("sources", []) if isinstance(tavily_response, dict) else []
                     answer_text = tavily_response.get("answer") if isinstance(tavily_response, dict) else None
+
                     if answer_text:
                         summary = answer_text.split(". ")[0].strip()
                         if not summary:
                             summary = answer_text.strip()[:220]
                         existing_msg = coaching_data.get("personalized_message", "").strip()
+
                         if existing_msg:
                             coaching_data["personalized_message"] = f"{existing_msg}\n\nResearch insight: {summary}."
                         else:
                             coaching_data["personalized_message"] = f"Research insight: {summary}."
+                        tavily_used = True  # Mark Tavily as used
                         logger.info(f"✅ Tavily enrichment added to coaching message")
+
+                    # Handle sources based on workflow type
                     if sources:
-                        extra_steps = [
-                            f"Source: {src.get('title', 'Link')} - {src.get('url', '')}"
-                            for src in sources[:2]
-                        ]
-                        coaching_data["next_steps"] = (coaching_data.get("next_steps", []) + extra_steps)[:5]
-                        logger.info(f"✅ Added {len(sources)} Tavily sources to next steps")
+                        if workflow_type == "food_logging":
+                            # For food logging: Add sources to next_steps
+                            extra_steps = [
+                                f"Source: {src.get('title', 'Link')} - {src.get('url', '')}"
+                                for src in sources[:2]
+                            ]
+                            coaching_data["next_steps"] = (coaching_data.get("next_steps", []) + extra_steps)[:5]
+                            logger.info(f"✅ Added {len(sources)} Tavily sources to next steps")
+                        else:
+                            # For nutrition queries: Embed sources in message footer
+                            source_list = "\n\n".join([
+                                f"Source: {src.get('title', 'Unknown')} - {src.get('url', '')}"
+                                for src in sources[:2]
+                            ])
+                            coaching_data["personalized_message"] = (
+                                f"{coaching_data.get('personalized_message', '')}\n\n{source_list}"
+                            )
+                            logger.info(f"✅ Embedded {len(sources)} Tavily sources in message")
+
                 except Exception as mcp_err:
                     logger.warning("Tavily MCP enrichment skipped: %s", mcp_err, exc_info=True)
             else:
@@ -363,9 +395,13 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
             coaching_result = self._parse_coaching_result(coaching_data)
 
+            # Store tavily_used flag in user_context for orchestrator to retrieve
+            if user_context is not None:
+                user_context["tavily_used"] = tavily_used
+
             logger.info(
                 f"✅ Generated coaching: {len(coaching_result.nutrient_insights)} insights, "
-                f"{len(coaching_result.meal_suggestions)} suggestions"
+                f"{len(coaching_result.meal_suggestions)} suggestions (Tavily: {tavily_used})"
             )
 
             return coaching_result
@@ -387,12 +423,14 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         total_meals: int,
         current_streak: int,
         food_frequency: List[Dict],
-        user_context: Dict[str, Any]
+        user_context: Dict[str, Any],
+        workflow_type: str = "food_logging"
     ) -> Dict[str, Any]:
         """
         Generate dynamic coaching using GPT-4o based on user history and current meal.
 
         This replaces ALL hardcoded templates with AI-generated personalized coaching.
+        Uses different prompts for different workflows.
 
         Args:
             user_id: User ID
@@ -400,6 +438,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             user_rdv: Personalized RDV for all 8 nutrients
             week1_averages: Last 7 days average intake
             trends: Nutrient trends (improving/declining/stable)
+            workflow_type: "food_logging", "nutrition_query", "health_coaching", "general_chat"
             gaps: Nutrient gaps analysis
             primary_gap: Most important nutrient to focus on
             is_learning_phase: Whether user is in learning phase
@@ -450,7 +489,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             high_nutrients=high_nutrients,
             low_nutrients=low_nutrients,
             poor_meal_count=poor_meal_count,
-            streak_status=streak_status
+            streak_status=streak_status,
+            workflow_type=workflow_type
         )
 
         # Call GPT-4o for dynamic coaching
@@ -504,9 +544,17 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         high_nutrients: Dict[str, float],
         low_nutrients: Dict[str, float],
         poor_meal_count: int,
-        streak_status: str
+        streak_status: str,
+        workflow_type: str = "food_logging"
     ) -> str:
-        """Build dynamic system prompt for GPT-4o coaching generation with meal quality context."""
+        """Build dynamic system prompt for GPT-4o coaching generation.
+
+        Creates different prompts for different workflows:
+        - food_logging: Celebration + full nutrient breakdown + motivational tips
+        - nutrition_query: Direct answer + optional follow-up questions
+        - health_coaching: Personalized advice
+        - general_chat: Conversational response
+        """
 
         # Extract top foods user eats
         top_foods = [f["food_name"] for f in food_frequency[:5]] if food_frequency else []
@@ -525,6 +573,21 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         improving_nutrients = [n for n, t in trends.items() if t == "improving"]
         declining_nutrients = [n for n, t in trends.items() if t == "declining"]
 
+        # Branch based on workflow type
+        if workflow_type in ["nutrition_query", "health_coaching", "general_chat"]:
+            # Simple conversational prompt for queries (no coaching celebration)
+            return self._build_nutrition_query_prompt(
+                food_list=food_list,
+                knowledge_result=knowledge_result,
+                user_rdv=user_rdv,
+                week1_averages=week1_averages,
+                gaps=gaps,
+                primary_gap=primary_gap,
+                total_meals=total_meals,
+                workflow_type=workflow_type
+            )
+
+        # FOOD LOGGING WORKFLOW - Full coaching with celebration
         if is_learning_phase:
             phase_context = f"""
 **LEARNING PHASE MODE** (First 7 days/21 meals)
@@ -650,6 +713,102 @@ Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
 8. Focus on budget-aware recommendations ({budget} budget)
 9. Adjust tone based on meal quality (see tone instructions above)
 10. next_steps should be SIMPLE actions, NO research citations
+
+Generate the JSON now:"""
+
+        return prompt
+
+    def _build_nutrition_query_prompt(
+        self,
+        food_list: str,
+        knowledge_result: KnowledgeResult,
+        user_rdv: Dict[str, float],
+        week1_averages: Dict[str, float],
+        gaps: Dict[str, Dict],
+        primary_gap: str,
+        total_meals: int,
+        workflow_type: str
+    ) -> str:
+        """Build conversational prompt for nutrition queries (chat endpoint)."""
+
+        # Build nutrition data context
+        foods_mentioned = food_list if food_list else "No specific food"
+
+        # Check if user has history for personalization
+        has_history = total_meals > 0
+        personalization_context = ""
+        if has_history:
+            # Include relevant user context for personalization
+            gap_summary = []
+            for nutrient, data in list(gaps.items())[:2]:  # Top 2 gaps
+                if data["priority"] == "high":
+                    gap_summary.append(f"{nutrient} (currently {data['percent_met']}% of target)")
+
+            if gap_summary:
+                personalization_context = f"""
+**User's Nutrition History (Optional for Personalization):**
+- Total meals logged: {total_meals}
+- Key nutritional gaps: {', '.join(gap_summary)}
+- Weekly iron average: {week1_averages.get('iron', 0):.1f}mg (target: {user_rdv.get('iron', 18):.1f}mg)
+- Use this ONLY if relevant to the question asked
+"""
+
+        # Build nutrition data if foods were found
+        nutrition_context = ""
+        if knowledge_result.foods:
+            nutrition_context = f"""
+**Nutrition Data for: {food_list}**
+Per 250g serving (typical portion):
+- Calories: {knowledge_result.total_calories:.0f} kcal ({(knowledge_result.total_calories/user_rdv.get('calories',2500)*100):.0f}% of daily needs)
+- Protein: {knowledge_result.total_protein:.1f}g ({(knowledge_result.total_protein/user_rdv.get('protein',60)*100):.0f}% of daily needs)
+- Carbs: {knowledge_result.total_carbohydrates:.1f}g ({(knowledge_result.total_carbohydrates/user_rdv.get('carbs',325)*100):.0f}% of daily needs)
+- Fat: {knowledge_result.total_fat:.1f}g ({(knowledge_result.total_fat/user_rdv.get('fat',70)*100):.0f}% of daily needs)
+- Iron: {knowledge_result.total_iron:.1f}mg ({(knowledge_result.total_iron/user_rdv.get('iron',18)*100):.0f}% of daily needs)
+- Calcium: {knowledge_result.total_calcium:.1f}mg ({(knowledge_result.total_calcium/user_rdv.get('calcium',1000)*100):.0f}% of daily needs)
+- Vitamin A: {knowledge_result.total_vitamin_a:.1f}mcg ({(knowledge_result.total_vitamin_a/user_rdv.get('vitamin_a',800)*100):.0f}% of daily needs)
+- Zinc: {knowledge_result.total_zinc:.1f}mg ({(knowledge_result.total_zinc/user_rdv.get('zinc',8)*100):.0f}% of daily needs)
+
+Source: Nigerian Foods Nutrition Database
+"""
+
+        prompt = f"""You are KAI, a conversational Nigerian nutrition assistant. Answer the user's question directly and naturally.
+
+**User's Question Context:**
+- Foods mentioned: {foods_mentioned}
+- Query type: {workflow_type}
+
+{nutrition_context}
+{personalization_context}
+
+**Your Task:**
+Generate a CONVERSATIONAL JSON response with ONLY this field:
+{{
+    "personalized_message": "Direct answer to the user's question. 3-5 sentences.
+
+    Structure:
+    1. Direct answer with specific numbers/facts
+    2. Additional helpful context (serving sizes, comparisons, benefits)
+    3. Optional personalization if user history is relevant
+    4. End with a follow-up question to encourage engagement (e.g., 'Would you like to know about other iron-rich soups?' or 'Should I suggest a meal plan?')
+
+    Guidelines:
+    - Be CONVERSATIONAL, not coaching-heavy
+    - Use emojis sparingly (1-2 per message)
+    - Answer what was asked - don't give unsolicited advice
+    - Keep it concise and focused
+    - NO motivational tips
+    - NO next_steps list
+    - If personalizing, be subtle (e.g., 'Based on your recent meals, this could help boost your iron intake')
+    - End with an engaging follow-up question
+    "
+}}
+
+**IMPORTANT - Response should ONLY contain:**
+- ✅ personalized_message field
+- ❌ NO motivational_tip
+- ❌ NO next_steps
+- ❌ NO nutrient_insights
+- ❌ NO meal_suggestions
 
 Generate the JSON now:"""
 

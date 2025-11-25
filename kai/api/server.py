@@ -249,6 +249,9 @@ async def chat(
         if knowledge:
             sources = getattr(knowledge, "sources_used", [])
 
+        # Get tavily_used flag from orchestrator result
+        tavily_used = result.get("tavily_used", False)
+
         return ChatResponse(
             success=True,
             message=message,
@@ -258,6 +261,7 @@ async def chat(
             follow_up_suggestions=suggestions,
             processing_time_ms=int((time.time() - start) * 1000),
             workflow_path=result.get("workflow", "general_chat"),  # ✅ Show workflow!
+            tavily_used=tavily_used,  # ✅ Track if Tavily was used!
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
