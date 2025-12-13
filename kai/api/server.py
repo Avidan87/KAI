@@ -249,6 +249,11 @@ async def chat(
         if knowledge:
             sources = getattr(knowledge, "sources_used", [])
 
+        # Get Tavily sources from orchestrator result and merge with knowledge sources
+        tavily_sources = result.get("tavily_sources", [])
+        if tavily_sources:
+            sources = sources + tavily_sources  # Merge both source lists
+
         # Get tavily_used flag from orchestrator result
         tavily_used = result.get("tavily_used", False)
 

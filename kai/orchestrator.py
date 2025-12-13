@@ -304,11 +304,15 @@ async def handle_user_request(
         # Extract tavily_used flag from user_context (set by coaching agent)
         tavily_used = user_ctx.get("tavily_used", False)
 
+        # Extract tavily_sources from coaching data if available
+        tavily_sources = coaching_result.coaching_data.get("tavily_sources", [])
+
         return {
             "workflow": "nutrition_query",
             "nutrition": knowledge_result,
             "coaching": coaching_result,
             "tavily_used": tavily_used,
+            "tavily_sources": tavily_sources,
         }
 
     else:

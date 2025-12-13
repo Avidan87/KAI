@@ -304,7 +304,43 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             gaps = get_nutrient_gap_priority(week1_averages, user_rdv)
             primary_gap = get_primary_nutritional_gap(gaps)
 
-            # Generate coaching using GPT-4o
+            # Optionally fetch Tavily research BEFORE GPT-4o (for natural integration)
+            research_requested = (user_context or {}).get("use_web_research", False)
+            tavily_context = None
+            tavily_sources = []
+            tavily_used = False
+
+            if research_requested and workflow_type in ["nutrition_query", "health_coaching", "general_chat"]:
+                # For queries: Fetch Tavily research first so GPT-4o can integrate it naturally
+                query = user_context.get("user_question", "Nigerian nutrition information")
+                logger.info(f"🌐 Calling Tavily BEFORE GPT-4o for {workflow_type}: {query}")
+
+                try:
+                    tavily_response = await asyncio.wait_for(
+                        self._call_tavily_mcp(query=query, max_results=3),
+                        timeout=12.0
+                    )
+                    answer_text = tavily_response.get("answer") if isinstance(tavily_response, dict) else None
+                    sources = tavily_response.get("sources", []) if isinstance(tavily_response, dict) else []
+
+                    if answer_text:
+                        # Extract clean research summary
+                        summary = answer_text.strip()
+                        sentences = summary.split(". ")
+                        tavily_context = ". ".join(sentences[:2]).strip()
+                        if not tavily_context.endswith("."):
+                            tavily_context += "."
+                        tavily_used = True
+                        logger.info(f"✅ Tavily context retrieved for GPT-4o integration")
+
+                    if sources:
+                        tavily_sources = [src.get('url', '') for src in sources[:3] if src.get('url')]
+                        logger.info(f"✅ Retrieved {len(tavily_sources)} Tavily sources")
+
+                except Exception as mcp_err:
+                    logger.warning("Tavily enrichment skipped: %s", mcp_err, exc_info=True)
+
+            # Generate coaching using GPT-4o (with Tavily context if available)
             coaching_data = await self._generate_dynamic_coaching(
                 user_id=user_id,
                 knowledge_result=knowledge_result,
@@ -318,80 +354,15 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 current_streak=current_streak,
                 food_frequency=food_frequency,
                 user_context=user_context or {},
-                workflow_type=workflow_type
+                workflow_type=workflow_type,
+                tavily_context=tavily_context  # Pass Tavily research to GPT-4o
             )
 
-            # Optionally enrich with Tavily MCP web research
-            research_requested = (user_context or {}).get("use_web_research", False)
-            has_deficiency = any(
-                ni.get("status") == "deficient" for ni in coaching_data.get("nutrient_insights", [])
-            )
-            tavily_used = False  # Track if Tavily was successfully used
+            # Store Tavily sources in coaching_data for orchestrator
+            if tavily_sources:
+                coaching_data["tavily_sources"] = tavily_sources
 
-            # Workflow-aware Tavily enrichment
-            if research_requested or has_deficiency:
-                # Build appropriate query based on workflow type
-                if workflow_type in ["nutrition_query", "health_coaching", "general_chat"]:
-                    # For queries: Use user's original question or general nutrition query
-                    query_context = user_context.get("user_question", "Nigerian nutrition information")
-                    query = query_context
-                else:
-                    # For food logging: Query about nutrient deficiencies
-                    deficient_names = [
-                        ni.get("nutrient") for ni in coaching_data.get("nutrient_insights", [])
-                        if ni.get("status") == "deficient"
-                    ]
-                    query = "Nigerian foods to improve " + (
-                        ", ".join(deficient_names[:2]) if deficient_names else "nutrition"
-                    )
-
-                logger.info(f"🌐 Calling Tavily MCP for {workflow_type}: {query}")
-                try:
-                    tavily_response = await asyncio.wait_for(
-                        self._call_tavily_mcp(query=query, max_results=3),
-                        timeout=12.0
-                    )
-                    sources = tavily_response.get("sources", []) if isinstance(tavily_response, dict) else []
-                    answer_text = tavily_response.get("answer") if isinstance(tavily_response, dict) else None
-
-                    if answer_text:
-                        summary = answer_text.split(". ")[0].strip()
-                        if not summary:
-                            summary = answer_text.strip()[:220]
-                        existing_msg = coaching_data.get("personalized_message", "").strip()
-
-                        if existing_msg:
-                            coaching_data["personalized_message"] = f"{existing_msg}\n\nResearch insight: {summary}."
-                        else:
-                            coaching_data["personalized_message"] = f"Research insight: {summary}."
-                        tavily_used = True  # Mark Tavily as used
-                        logger.info(f"✅ Tavily enrichment added to coaching message")
-
-                    # Handle sources based on workflow type
-                    if sources:
-                        if workflow_type == "food_logging":
-                            # For food logging: Add sources to next_steps
-                            extra_steps = [
-                                f"Source: {src.get('title', 'Link')} - {src.get('url', '')}"
-                                for src in sources[:2]
-                            ]
-                            coaching_data["next_steps"] = (coaching_data.get("next_steps", []) + extra_steps)[:5]
-                            logger.info(f"✅ Added {len(sources)} Tavily sources to next steps")
-                        else:
-                            # For nutrition queries: Embed sources in message footer
-                            source_list = "\n\n".join([
-                                f"Source: {src.get('title', 'Unknown')} - {src.get('url', '')}"
-                                for src in sources[:2]
-                            ])
-                            coaching_data["personalized_message"] = (
-                                f"{coaching_data.get('personalized_message', '')}\n\n{source_list}"
-                            )
-                            logger.info(f"✅ Embedded {len(sources)} Tavily sources in message")
-
-                except Exception as mcp_err:
-                    logger.warning("Tavily MCP enrichment skipped: %s", mcp_err, exc_info=True)
-            else:
-                logger.info(f"⏭️ Tavily enrichment skipped: research_requested={research_requested}, has_deficiency={has_deficiency}")
+            # (Tavily enrichment for food logging would go here if needed in future)
 
             coaching_result = self._parse_coaching_result(coaching_data)
 
@@ -424,13 +395,17 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         current_streak: int,
         food_frequency: List[Dict],
         user_context: Dict[str, Any],
-        workflow_type: str = "food_logging"
+        workflow_type: str = "food_logging",
+        tavily_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate dynamic coaching using GPT-4o based on user history and current meal.
 
         This replaces ALL hardcoded templates with AI-generated personalized coaching.
         Uses different prompts for different workflows.
+
+        Args:
+            tavily_context: Optional research context from Tavily to integrate naturally
 
         Args:
             user_id: User ID
@@ -584,7 +559,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 gaps=gaps,
                 primary_gap=primary_gap,
                 total_meals=total_meals,
-                workflow_type=workflow_type
+                workflow_type=workflow_type,
+                tavily_context=tavily_context
             )
 
         # FOOD LOGGING WORKFLOW - Full coaching with celebration
@@ -727,9 +703,14 @@ Generate the JSON now:"""
         gaps: Dict[str, Dict],
         primary_gap: str,
         total_meals: int,
-        workflow_type: str
+        workflow_type: str,
+        tavily_context: Optional[str] = None
     ) -> str:
-        """Build conversational prompt for nutrition queries (chat endpoint)."""
+        """Build conversational prompt for nutrition queries (chat endpoint).
+
+        Args:
+            tavily_context: Optional research context from Tavily to integrate naturally
+        """
 
         # Build nutrition data context
         foods_mentioned = food_list if food_list else "No specific food"
@@ -771,6 +752,17 @@ Per 250g serving (typical portion):
 Source: Nigerian Foods Nutrition Database
 """
 
+        # Check if Tavily research context is available
+        tavily_context_section = ""
+        if tavily_context:
+            tavily_context_section = f"""
+**Additional Research Context (integrate naturally):**
+{tavily_context}
+
+IMPORTANT: Integrate this research NATURALLY into your response. Do NOT use prefixes like "Research insight:" or "Source:".
+Weave it seamlessly into the answer as if it's part of your knowledge.
+"""
+
         prompt = f"""You are KAI, a conversational Nigerian nutrition assistant. Answer the user's question directly and naturally.
 
 **User's Question Context:**
@@ -779,6 +771,7 @@ Source: Nigerian Foods Nutrition Database
 
 {nutrition_context}
 {personalization_context}
+{tavily_context_section}
 
 **Your Task:**
 Generate a CONVERSATIONAL JSON response with ONLY this field:
@@ -787,18 +780,19 @@ Generate a CONVERSATIONAL JSON response with ONLY this field:
 
     Structure:
     1. Direct answer with specific numbers/facts
-    2. Additional helpful context (serving sizes, comparisons, benefits)
+    2. Additional helpful context (serving sizes, comparisons, benefits, research insights)
     3. Optional personalization if user history is relevant
-    4. End with a follow-up question to encourage engagement (e.g., 'Would you like to know about other iron-rich soups?' or 'Should I suggest a meal plan?')
+    4. End with a follow-up question to encourage engagement
 
     Guidelines:
     - Be CONVERSATIONAL, not coaching-heavy
     - Use emojis sparingly (1-2 per message)
     - Answer what was asked - don't give unsolicited advice
     - Keep it concise and focused
+    - Integrate research context NATURALLY (no "Research insight:" prefixes)
     - NO motivational tips
     - NO next_steps list
-    - If personalizing, be subtle (e.g., 'Based on your recent meals, this could help boost your iron intake')
+    - NO source citations in the message
     - End with an engaging follow-up question
     "
 }}
@@ -809,6 +803,7 @@ Generate a CONVERSATIONAL JSON response with ONLY this field:
 - ❌ NO next_steps
 - ❌ NO nutrient_insights
 - ❌ NO meal_suggestions
+- ❌ NO source citations
 
 Generate the JSON now:"""
 
