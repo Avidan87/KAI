@@ -20,6 +20,9 @@ import os
 
 from kai.models import VisionResult, DetectedFood
 from kai.mcp_servers.midas_railway_client import get_portion_estimate
+from kai.agents.florence_bbox import FlorenceBBoxDetector
+import numpy as np
+from PIL import Image
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -255,25 +258,100 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             # (We need detected_foods info for portion logic)
             detected_foods = result_dict.get("detected_foods", [])
             if (image_url or image_base64) and detected_foods:
-                logger.info("📏 Calling MiDaS MCP for portion estimation")
-                try:
-                    portion = await get_portion_estimate(
-                        image_url=image_url,
-                        image_base64=image_base64,
-                        reference_object="plate"
-                    )
-                    portion_grams = portion.get("portion_grams")
-                    if portion_grams and portion_grams > 0:
-                        logger.info(f"✅ MiDaS estimated portion: {portion_grams}g per item")
+                logger.info("📏 Starting per-food portion estimation")
+
+                # Decode image for Florence-2 and cropping
+                img_array = None
+                if image_base64:
+                    img_bytes = base64.b64decode(image_base64)
+                    img_array = np.array(Image.open(io.BytesIO(img_bytes)))
+
+                # Try Florence-2 for per-food bounding boxes
+                use_florence = len(detected_foods) > 1 and img_array is not None
+
+                if use_florence:
+                    try:
+                        logger.info("🔍 Using Florence-2 for per-food bounding boxes")
+                        florence = FlorenceBBoxDetector(device="cpu", model_variant="base")
+                        bboxes_detected = florence.detect_objects(img_array)
+                        florence.unload_model()
+
+                        # Match food names to bboxes (spatial ordering: left-to-right, top-to-bottom)
+                        bboxes_sorted = sorted(bboxes_detected, key=lambda b: (b["bbox"][1], b["bbox"][0]))
+
+                        logger.info(f"✓ Florence-2 detected {len(bboxes_sorted)} regions for {len(detected_foods)} foods")
+
+                        # Estimate portion for each food region
+                        MAX_REASONABLE_PORTION = 1000.0
+
+                        for idx, food in enumerate(detected_foods):
+                            if idx < len(bboxes_sorted):
+                                bbox = bboxes_sorted[idx]["bbox"]  # [x1, y1, x2, y2]
+                                x1, y1, x2, y2 = bbox
+
+                                # Crop image to food region
+                                cropped = img_array[y1:y2, x1:x2]
+
+                                # Encode cropped region
+                                pil_crop = Image.fromarray(cropped.astype(np.uint8))
+                                buf = io.BytesIO()
+                                pil_crop.save(buf, format="JPEG")
+                                cropped_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+                                # Call MCP with cropped region + food_type
+                                portion = await get_portion_estimate(
+                                    image_base64=cropped_b64,
+                                    food_type=food.get("name"),
+                                    reference_object="plate"
+                                )
+                                portion_grams = portion.get("portion_grams", 0)
+
+                                # Cap at reasonable max
+                                if portion_grams > MAX_REASONABLE_PORTION:
+                                    logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION}g")
+                                    portion_grams = MAX_REASONABLE_PORTION
+
+                                food["estimated_grams"] = portion_grams
+                                logger.info(f"✓ {food.get('name')}: {portion_grams:.1f}g (bbox: {bbox})")
+                            else:
+                                logger.warning(f"⚠️ No bbox for {food.get('name')}, using default 250g")
+                                food["estimated_grams"] = 250.0
+
                         midas_used = True
-                        # Update estimated_grams in result_dict for all detected foods
-                        for food in detected_foods:
-                            food["estimated_grams"] = portion_grams
-                    else:
-                        logger.warning("⚠️ MiDaS MCP fallback: portion_grams missing or invalid")
-                except Exception as e:
-                    logger.error(f"❌ MiDaS MCP fallback: {str(e)}")
-                    midas_used = False
+
+                    except Exception as e:
+                        logger.error(f"❌ Florence-2 failed: {e}, falling back to division method")
+                        use_florence = False
+
+                # Fallback: divide total portion evenly
+                if not use_florence:
+                    try:
+                        portion = await get_portion_estimate(
+                            image_url=image_url,
+                            image_base64=image_base64,
+                            reference_object="plate"
+                        )
+                        portion_grams = portion.get("portion_grams")
+
+                        MAX_REASONABLE_PORTION = 1000.0
+                        if portion_grams and portion_grams > 0:
+                            if portion_grams > MAX_REASONABLE_PORTION:
+                                portion_grams = MAX_REASONABLE_PORTION
+
+                            # Split evenly among foods
+                            num_foods = len(detected_foods)
+                            portion_per_food = portion_grams / num_foods if num_foods > 0 else portion_grams
+
+                            logger.info(f"✅ Fallback: {portion_grams}g total → {portion_per_food:.1f}g per food")
+                            midas_used = True
+
+                            for food in detected_foods:
+                                food["estimated_grams"] = portion_per_food
+                        else:
+                            logger.warning("⚠️ MiDaS MCP returned invalid portion")
+                    except Exception as e:
+                        logger.error(f"❌ MiDaS fallback failed: {e}")
+                        midas_used = False
             # Now, build the VisionResult from result_dict and correct midas_used
             vision_result = self._parse_detection_result(result_dict, midas_used=midas_used)
             return vision_result

@@ -79,7 +79,8 @@ class MiDaSRailwayClient:
         image_url: Optional[str] = None,
         image_base64: Optional[str] = None,
         reference_object: Optional[str] = None,
-        reference_size_cm: Optional[float] = None
+        reference_size_cm: Optional[float] = None,
+        food_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Estimate portion size using depth estimation.
@@ -89,6 +90,7 @@ class MiDaSRailwayClient:
             image_base64: Base64 encoded image (optional if image_url provided)
             reference_object: Type of reference object (e.g., "plate", "spoon", "hand")
             reference_size_cm: Known size of reference object in cm
+            food_type: Type of food for density calculation (e.g., "Jollof Rice")
 
         Returns:
             Dict with portion estimate in grams/ml and confidence score
@@ -100,7 +102,8 @@ class MiDaSRailwayClient:
 
         payload = {
             "reference_object": reference_object,
-            "reference_size_cm": reference_size_cm
+            "reference_size_cm": reference_size_cm,
+            "food_type": food_type
         }
 
         # Add either URL or base64 to payload
@@ -154,7 +157,8 @@ class MiDaSRailwayClient:
 async def get_portion_estimate(
     image_url: Optional[str] = None,
     image_base64: Optional[str] = None,
-    reference_object: Optional[str] = None
+    reference_object: Optional[str] = None,
+    food_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Convenience function to get portion estimate from MiDaS Railway.
@@ -165,6 +169,7 @@ async def get_portion_estimate(
         image_url: URL of food image (optional if image_base64 provided)
         image_base64: Base64 encoded image (optional if image_url provided)
         reference_object: Detected reference object (plate, spoon, hand, etc.)
+        food_type: Type of food for density calculation (e.g., "Jollof Rice")
 
     Returns:
         {
@@ -212,7 +217,8 @@ async def get_portion_estimate(
                 image_url=image_url,
                 image_base64=image_base64,
                 reference_object=reference_object,
-                reference_size_cm=reference_size
+                reference_size_cm=reference_size,
+                food_type=food_type
             )
             return result
 

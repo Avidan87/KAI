@@ -129,12 +129,15 @@ class NigerianFoodVectorDB:
             "price_tier": food.get("price_tier", "mid"),
             "availability": food.get("availability", "widely_available"),
             "confidence": food.get("confidence", 0.0),
-            # Store key nutrients for filtering
+            # Store ALL 8 nutrients for filtering and retrieval
             "calories": nutrients.get("calories", 0),
             "protein": nutrients.get("protein", 0),
+            "carbohydrates": nutrients.get("carbohydrates", 0),
+            "fat": nutrients.get("fat", 0),
             "iron": nutrients.get("iron", 0),
             "calcium": nutrients.get("calcium", 0),
             "vitamin_a": nutrients.get("vitamin_a", 0),
+            "zinc": nutrients.get("zinc", 0),
             # Store dietary flags as comma-separated string
             "dietary_flags": ",".join(food.get("dietary_flags", [])),
             "meal_types": ",".join(food.get("meal_types", [])),
