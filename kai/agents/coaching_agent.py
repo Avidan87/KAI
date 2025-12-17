@@ -465,7 +465,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             low_nutrients=low_nutrients,
             poor_meal_count=poor_meal_count,
             streak_status=streak_status,
-            workflow_type=workflow_type
+            workflow_type=workflow_type,
+            tavily_context=tavily_context
         )
 
         # Call GPT-4o for dynamic coaching
@@ -520,7 +521,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         low_nutrients: Dict[str, float],
         poor_meal_count: int,
         streak_status: str,
-        workflow_type: str = "food_logging"
+        workflow_type: str = "food_logging",
+        tavily_context: Optional[str] = None
     ) -> str:
         """Build dynamic system prompt for GPT-4o coaching generation.
 
