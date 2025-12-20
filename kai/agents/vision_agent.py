@@ -265,6 +265,11 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                 if image_base64:
                     img_bytes = base64.b64decode(image_base64)
                     img_array = np.array(Image.open(io.BytesIO(img_bytes)))
+                elif image_url:
+                    # Fetch image from URL
+                    import httpx
+                    response = httpx.get(image_url, timeout=30.0)
+                    img_array = np.array(Image.open(io.BytesIO(response.content)))
 
                 # Try Florence-2 for per-food bounding boxes
                 use_florence = len(detected_foods) > 1 and img_array is not None

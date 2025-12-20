@@ -52,12 +52,13 @@ class FlorenceBBoxDetector:
                 trust_remote_code=True
             )
 
-            # Load model
-            torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
+            # Load model with Python 3.13 compatibility
+            dtype = torch.float16 if self.device == "cuda" else torch.float32
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype=torch_dtype,
-                trust_remote_code=True
+                torch_dtype=dtype,  # Use torch_dtype (transformers expects this)
+                trust_remote_code=True,
+                attn_implementation="eager"  # Fix for Python 3.13: disable SDPA
             )
 
             # Move to device
@@ -90,6 +91,10 @@ class FlorenceBBoxDetector:
         """
         self.load_model()
 
+        # Validate image
+        if image is None:
+            raise ValueError("Image cannot be None")
+
         # Convert to PIL Image
         if isinstance(image, np.ndarray):
             pil_image = Image.fromarray(image.astype(np.uint8))
@@ -109,9 +114,8 @@ class FlorenceBBoxDetector:
                 return_tensors="pt"
             )
 
-            # Move to device
-            torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
-            inputs = inputs.to(self.device, torch_dtype)
+            # Move to device (properly handle BatchEncoding)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             # Generate predictions
             with torch.no_grad():
@@ -119,8 +123,8 @@ class FlorenceBBoxDetector:
                     input_ids=inputs["input_ids"],
                     pixel_values=inputs["pixel_values"],
                     max_new_tokens=1024,
-                    do_sample=False,
-                    num_beams=3
+                    num_beams=3,  # Beam search for better accuracy
+                    use_cache=False  # Disable KV caching to avoid past_key_values issue
                 )
 
             # Decode results
