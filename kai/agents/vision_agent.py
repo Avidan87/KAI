@@ -286,14 +286,51 @@ Be specific about Nigerian dishes, not generic descriptions!"""
 
                         logger.info(f"✓ Florence-2 detected {len(bboxes_sorted)} regions for {len(detected_foods)} foods")
 
+                        # CRITICAL FIX: Check for bbox overlaps (common in Nigerian multi-component plates)
+                        # Overlapping bboxes cause double-counting of shared regions → over-estimation
+                        total_overlap = 0
+                        for i in range(len(bboxes_sorted)):
+                            for j in range(i + 1, len(bboxes_sorted)):
+                                bbox1, bbox2 = bboxes_sorted[i]["bbox"], bboxes_sorted[j]["bbox"]
+                                x1_1, y1_1, x2_1, y2_1 = bbox1
+                                x1_2, y1_2, x2_2, y2_2 = bbox2
+
+                                # Calculate intersection area
+                                x_left, y_top = max(x1_1, x1_2), max(y1_1, y1_2)
+                                x_right, y_bottom = min(x2_1, x2_2), min(y2_1, y2_2)
+
+                                if x_right > x_left and y_bottom > y_top:
+                                    intersection = (x_right - x_left) * (y_bottom - y_top)
+                                    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+                                    overlap_ratio = intersection / area1 if area1 > 0 else 0
+                                    total_overlap += overlap_ratio
+
+                        if total_overlap > 0.5:  # >50% cumulative overlap
+                            logger.warning(
+                                f"⚠️ High bbox overlap detected ({total_overlap:.1%}). "
+                                f"Foods likely on same plate - portions will be scaled to prevent double-counting."
+                            )
+
                         # Estimate portion for each food region
-                        MAX_REASONABLE_PORTION = 1000.0
+                        MAX_REASONABLE_PORTION_PER_FOOD = 600.0  # Reduced from 1000g - realistic per-food max
+                        img_height, img_width = img_array.shape[:2]
 
                         for idx, food in enumerate(detected_foods):
                             if idx < len(bboxes_sorted):
                                 bbox = bboxes_sorted[idx]["bbox"]  # [x1, y1, x2, y2]
                                 # Convert float coords to integers for array slicing
                                 x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+
+                                # CRITICAL FIX: Validate bbox is not absurdly large
+                                # If bbox covers >70% of image, it's likely detecting the entire plate
+                                bbox_width, bbox_height = x2 - x1, y2 - y1
+                                bbox_area_ratio = (bbox_width * bbox_height) / (img_width * img_height)
+
+                                if bbox_area_ratio > 0.7:
+                                    logger.warning(
+                                        f"⚠️ {food.get('name')}: bbox covers {bbox_area_ratio:.1%} of image "
+                                        f"(likely entire plate, not individual food item)"
+                                    )
 
                                 # Crop image to food region
                                 cropped = img_array[y1:y2, x1:x2]
@@ -312,16 +349,34 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 )
                                 portion_grams = portion.get("portion_grams", 0)
 
-                                # Cap at reasonable max
-                                if portion_grams > MAX_REASONABLE_PORTION:
-                                    logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION}g")
-                                    portion_grams = MAX_REASONABLE_PORTION
+                                # Cap at reasonable max per food
+                                if portion_grams > MAX_REASONABLE_PORTION_PER_FOOD:
+                                    logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION_PER_FOOD}g")
+                                    portion_grams = MAX_REASONABLE_PORTION_PER_FOOD
 
                                 food["estimated_grams"] = portion_grams
                                 logger.info(f"✓ {food.get('name')}: {portion_grams:.1f}g (bbox: {bbox})")
                             else:
                                 logger.warning(f"⚠️ No bbox for {food.get('name')}, using default 250g")
                                 food["estimated_grams"] = 250.0
+
+                        # CRITICAL FIX: Check total meal portion and scale down if unrealistic
+                        # Nigerian meals typically 300-800g total (plate + all components)
+                        total_estimated = sum(food["estimated_grams"] for food in detected_foods)
+                        MAX_REASONABLE_MEAL = 800.0
+
+                        if total_estimated > MAX_REASONABLE_MEAL:
+                            scale_factor = MAX_REASONABLE_MEAL / total_estimated
+                            logger.warning(
+                                f"⚠️ Total meal {total_estimated:.0f}g exceeds realistic max ({MAX_REASONABLE_MEAL}g). "
+                                f"Scaling all portions down by {scale_factor:.2f}x to prevent over-estimation."
+                            )
+                            for food in detected_foods:
+                                original = food["estimated_grams"]
+                                food["estimated_grams"] = original * scale_factor
+                                logger.info(f"   📉 {food.get('name')}: {original:.0f}g → {food['estimated_grams']:.0f}g")
+                        else:
+                            logger.info(f"✅ Total meal portion {total_estimated:.0f}g is reasonable")
 
                         midas_used = True
 
@@ -339,10 +394,11 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         )
                         portion_grams = portion.get("portion_grams")
 
-                        MAX_REASONABLE_PORTION = 1000.0
+                        MAX_REASONABLE_MEAL = 800.0  # Same as Florence-2 path for consistency
                         if portion_grams and portion_grams > 0:
-                            if portion_grams > MAX_REASONABLE_PORTION:
-                                portion_grams = MAX_REASONABLE_PORTION
+                            if portion_grams > MAX_REASONABLE_MEAL:
+                                logger.warning(f"⚠️ Total portion {portion_grams}g exceeds max ({MAX_REASONABLE_MEAL}g), capping")
+                                portion_grams = MAX_REASONABLE_MEAL
 
                             # Split evenly among foods
                             num_foods = len(detected_foods)
