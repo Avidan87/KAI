@@ -292,7 +292,8 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         for idx, food in enumerate(detected_foods):
                             if idx < len(bboxes_sorted):
                                 bbox = bboxes_sorted[idx]["bbox"]  # [x1, y1, x2, y2]
-                                x1, y1, x2, y2 = bbox
+                                # Convert float coords to integers for array slicing
+                                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
 
                                 # Crop image to food region
                                 cropped = img_array[y1:y2, x1:x2]
