@@ -315,7 +315,10 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         MAX_REASONABLE_PORTION_PER_FOOD = 600.0  # Reduced from 1000g - realistic per-food max
                         img_height, img_width = img_array.shape[:2]
 
-                        for idx, food in enumerate(detected_foods):
+                        # ⚡ OPTIMIZATION: Parallelize MiDaS calls for all foods
+                        # Prepare all crop data first (fast, local operations)
+                        async def estimate_single_portion(idx, food):
+                            """Estimate portion for a single food item"""
                             if idx < len(bboxes_sorted):
                                 bbox = bboxes_sorted[idx]["bbox"]  # [x1, y1, x2, y2]
                                 # Convert float coords to integers for array slicing
@@ -342,23 +345,47 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 cropped_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
 
                                 # Call MCP with cropped region + food_type
-                                portion = await get_portion_estimate(
-                                    image_base64=cropped_b64,
-                                    food_type=food.get("name"),
-                                    reference_object="plate"
-                                )
-                                portion_grams = portion.get("portion_grams", 0)
+                                try:
+                                    portion = await get_portion_estimate(
+                                        image_base64=cropped_b64,
+                                        food_type=food.get("name"),
+                                        reference_object="plate"
+                                    )
+                                    portion_grams = portion.get("portion_grams", 0)
 
-                                # Cap at reasonable max per food
-                                if portion_grams > MAX_REASONABLE_PORTION_PER_FOOD:
-                                    logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION_PER_FOOD}g")
-                                    portion_grams = MAX_REASONABLE_PORTION_PER_FOOD
+                                    # Cap at reasonable max per food
+                                    if portion_grams > MAX_REASONABLE_PORTION_PER_FOOD:
+                                        logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION_PER_FOOD}g")
+                                        portion_grams = MAX_REASONABLE_PORTION_PER_FOOD
 
-                                food["estimated_grams"] = portion_grams
-                                logger.info(f"✓ {food.get('name')}: {portion_grams:.1f}g (bbox: {bbox})")
+                                    logger.info(f"✓ {food.get('name')}: {portion_grams:.1f}g (bbox: {bbox})")
+                                    return portion_grams
+                                except Exception as e:
+                                    logger.error(f"❌ Portion estimation failed for {food.get('name')}: {e}, using 250g")
+                                    return 250.0
                             else:
                                 logger.warning(f"⚠️ No bbox for {food.get('name')}, using default 250g")
+                                return 250.0
+
+                        # Run all MiDaS calls in parallel (with semaphore to limit concurrent requests)
+                        import asyncio
+                        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent MiDaS calls to avoid overloading Railway
+
+                        async def limited_estimate(idx, food):
+                            async with semaphore:
+                                return await estimate_single_portion(idx, food)
+
+                        logger.info(f"⚡ Running {len(detected_foods)} portion estimations in parallel (max 3 concurrent)")
+                        portion_tasks = [limited_estimate(idx, food) for idx, food in enumerate(detected_foods)]
+                        portion_results = await asyncio.gather(*portion_tasks, return_exceptions=True)
+
+                        # Assign results back to foods
+                        for food, portion_grams in zip(detected_foods, portion_results):
+                            if isinstance(portion_grams, Exception):
+                                logger.error(f"❌ Portion estimation exception for {food.get('name')}: {portion_grams}, using 250g")
                                 food["estimated_grams"] = 250.0
+                            else:
+                                food["estimated_grams"] = portion_grams
 
                         # CRITICAL FIX: Check total meal portion and scale down if unrealistic
                         # Nigerian meals typically 300-800g total (plate + all components)

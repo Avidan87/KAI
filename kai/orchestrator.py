@@ -96,15 +96,22 @@ async def handle_user_request(
     logger.info(f"🚀 Orchestrator: Processing request for user {user_id}")
     has_image = bool(image_base64 or image_url)
 
-    # Step 1: Triage - Route request to appropriate workflow
-    triage = _get_agent("triage")
-    triage_result = await asyncio.wait_for(
-        triage.analyze_request(user_message=user_message, has_image=has_image, conversation_history=conversation_history),
-        timeout=30.0,  # Increased from 15s to handle network latency and API response time
-    )
-    logger.info(f"   → Workflow: {triage_result.workflow} (confidence: {triage_result.confidence:.2f})")
+    # Optimization: Skip Triage for image uploads (always food_logging workflow)
+    # This saves 1-3s of latency since file upload = 99% food logging
+    if has_image:
+        logger.info("   ⚡ Fast path: Image detected, skipping Triage (food_logging workflow)")
+        workflow = "food_logging"
+    else:
+        # Step 1: Triage - Route request to appropriate workflow
+        triage = _get_agent("triage")
+        triage_result = await asyncio.wait_for(
+            triage.analyze_request(user_message=user_message, has_image=has_image, conversation_history=conversation_history),
+            timeout=30.0,  # Increased from 15s to handle network latency and API response time
+        )
+        workflow = triage_result.workflow
+        logger.info(f"   → Workflow: {workflow} (confidence: {triage_result.confidence:.2f})")
 
-    if triage_result.workflow == "food_logging":
+    if workflow == "food_logging":
         # Full Pipeline: Vision → Knowledge → Coaching
         logger.info("   Pipeline: Vision → Knowledge → Coaching")
 
@@ -170,7 +177,8 @@ async def handle_user_request(
                         "confidence": food.similarity_score,
                     })
 
-                # Log meal to database
+                # ⚡ OPTIMIZATION: Log meal, update stats, and fetch profile data in optimized sequence
+                # First: Log meal (must complete first)
                 meal_record = await log_meal(
                     user_id=user_id,
                     meal_type="lunch",  # Could be inferred from time of day
@@ -179,24 +187,41 @@ async def handle_user_request(
                 )
                 logger.info(f"   → Saved meal to database: {meal_record['meal_id']}")
 
-                # Update user stats (calculate weekly averages, trends, streaks)
-                # This MUST happen after meal logging so coaching has latest stats
+                # Second: Update stats and fetch profile data in parallel
+                # Stats update is independent of fetching daily totals/health profile
                 try:
-                    updated_stats = await calculate_and_update_user_stats(user_id)
-                    logger.info(f"   → Updated user stats: {updated_stats.get('total_meals_logged', 0)} meals, {updated_stats.get('current_logging_streak', 0)} day streak")
-                except Exception as stats_error:
-                    logger.error(f"Stats update error (non-fatal): {stats_error}")
+                    stats_task = asyncio.create_task(calculate_and_update_user_stats(user_id))
+                    daily_totals_task = asyncio.create_task(get_daily_nutrition_totals(user_id))
+                    health_profile_task = asyncio.create_task(get_user_health_profile(user_id))
 
-                # Fetch daily totals and health profile concurrently
-                daily_totals_task = asyncio.create_task(get_daily_nutrition_totals(user_id))
-                health_profile_task = asyncio.create_task(get_user_health_profile(user_id))
-                daily_totals, health_profile = await asyncio.gather(daily_totals_task, health_profile_task)
+                    # Wait for all three to complete in parallel
+                    updated_stats, daily_totals, health_profile = await asyncio.gather(
+                        stats_task,
+                        daily_totals_task,
+                        health_profile_task,
+                        return_exceptions=True  # Don't fail if stats update fails
+                    )
 
-            except Exception as db_error:
-                logger.error(f"Database error: {db_error}")
-                # Continue without database (don't fail the request)
-                daily_totals = None
-                health_profile = None
+                    # Handle stats update result
+                    if isinstance(updated_stats, Exception):
+                        logger.error(f"Stats update error (non-fatal): {updated_stats}")
+                    else:
+                        logger.info(f"   → Updated user stats: {updated_stats.get('total_meals_logged', 0)} meals, {updated_stats.get('current_logging_streak', 0)} day streak")
+
+                    # Handle daily totals result
+                    if isinstance(daily_totals, Exception):
+                        logger.error(f"Daily totals fetch error: {daily_totals}")
+                        daily_totals = None
+
+                    # Handle health profile result
+                    if isinstance(health_profile, Exception):
+                        logger.error(f"Health profile fetch error: {health_profile}")
+                        health_profile = None
+
+                except Exception as db_error:
+                    logger.error(f"Database operations error: {db_error}")
+                    daily_totals = None
+                    health_profile = None
         else:
             daily_totals = None
             health_profile = None
@@ -239,12 +264,12 @@ async def handle_user_request(
 
         return response
 
-    elif triage_result.workflow == "nutrition_query":
+    elif workflow == "nutrition_query":
         # Nutrition Query: Knowledge + Coaching (no vision needed)
         logger.info("   Pipeline: Knowledge + Coaching")
 
         # If triage extracted food names, use Knowledge Agent
-        if triage_result.extracted_food_names:
+        if hasattr(triage_result, 'extracted_food_names') and triage_result.extracted_food_names:
             knowledge = _get_agent("knowledge")
             # Estimate typical portion (250g)
             portions = [250.0] * len(triage_result.extracted_food_names)
@@ -320,7 +345,6 @@ async def handle_user_request(
         logger.info("   Pipeline: Coaching")
 
         coaching = _get_agent("coaching")
-        workflow = triage_result.workflow  # "health_coaching" or "general_chat"
 
         # Create user context dict that will be modified by coaching agent
         user_ctx = {
@@ -376,7 +400,7 @@ async def handle_user_request(
         tavily_used = user_ctx.get("tavily_used", False)
 
         return {
-            "workflow": triage_result.workflow,
+            "workflow": workflow,
             "coaching": coaching_result,
             "tavily_used": tavily_used,
         }
