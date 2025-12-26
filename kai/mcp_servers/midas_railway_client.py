@@ -200,16 +200,8 @@ async def get_portion_estimate(
     reference_size = REFERENCE_SIZES.get(reference_object.lower()) if reference_object else None
 
     async with MiDaSRailwayClient() as client:
-        # Check if server is healthy first
-        try:
-            await client.health_check()
-        except Exception as e:
-            return {
-                "portion_grams": None,
-                "confidence": 0.0,
-                "error": f"MiDaS server unavailable: {str(e)}",
-                "fallback_used": True
-            }
+        # Skip health check - if server is down, the API call will fail anyway
+        # Health check adds unnecessary latency and potential DNS timeout issues
 
         # Estimate portion
         try:
