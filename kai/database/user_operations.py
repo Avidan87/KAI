@@ -92,9 +92,9 @@ async def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     async with get_db() as db:
         cursor = await db.execute(
             """
-            SELECT u.*, h.is_pregnant, h.is_lactating, h.has_anemia,
-                   h.weight_kg, h.height_cm, h.activity_level,
-                   h.health_goals, h.dietary_restrictions
+            SELECT u.*, h.weight_kg, h.height_cm, h.activity_level,
+                   h.health_goals, h.dietary_restrictions, h.target_weight_kg,
+                   h.calculated_calorie_goal, h.custom_calorie_goal, h.active_calorie_goal
             FROM users u
             LEFT JOIN user_health h ON u.user_id = h.user_id
             WHERE u.user_id = ?
@@ -115,14 +115,15 @@ async def get_user(user_id: str) -> Optional[Dict[str, Any]]:
             "age": row[4],
             "created_at": row[5],
             "updated_at": row[6],
-            "is_pregnant": row[7] if len(row) > 7 else False,
-            "is_lactating": row[8] if len(row) > 8 else False,
-            "has_anemia": row[9] if len(row) > 9 else False,
-            "weight_kg": row[10] if len(row) > 10 else None,
-            "height_cm": row[11] if len(row) > 11 else None,
-            "activity_level": row[12] if len(row) > 12 else None,
-            "health_goals": row[13] if len(row) > 13 else None,
-            "dietary_restrictions": row[14] if len(row) > 14 else None,
+            "weight_kg": row[7] if len(row) > 7 else None,
+            "height_cm": row[8] if len(row) > 8 else None,
+            "activity_level": row[9] if len(row) > 9 else None,
+            "health_goals": row[10] if len(row) > 10 else None,
+            "dietary_restrictions": row[11] if len(row) > 11 else None,
+            "target_weight_kg": row[12] if len(row) > 12 else None,
+            "calculated_calorie_goal": row[13] if len(row) > 13 else None,
+            "custom_calorie_goal": row[14] if len(row) > 14 else None,
+            "active_calorie_goal": row[15] if len(row) > 15 else None,
         }
 
 
@@ -139,9 +140,9 @@ async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     async with get_db() as db:
         cursor = await db.execute(
             """
-            SELECT u.*, h.is_pregnant, h.is_lactating, h.has_anemia,
-                   h.weight_kg, h.height_cm, h.activity_level,
-                   h.health_goals, h.dietary_restrictions
+            SELECT u.*, h.weight_kg, h.height_cm, h.activity_level,
+                   h.health_goals, h.dietary_restrictions, h.target_weight_kg,
+                   h.calculated_calorie_goal, h.custom_calorie_goal, h.active_calorie_goal
             FROM users u
             LEFT JOIN user_health h ON u.user_id = h.user_id
             WHERE u.email = ?
@@ -162,14 +163,15 @@ async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
             "age": row[4],
             "created_at": row[5],
             "updated_at": row[6],
-            "is_pregnant": row[7] if len(row) > 7 else False,
-            "is_lactating": row[8] if len(row) > 8 else False,
-            "has_anemia": row[9] if len(row) > 9 else False,
-            "weight_kg": row[10] if len(row) > 10 else None,
-            "height_cm": row[11] if len(row) > 11 else None,
-            "activity_level": row[12] if len(row) > 12 else None,
-            "health_goals": row[13] if len(row) > 13 else None,
-            "dietary_restrictions": row[14] if len(row) > 14 else None,
+            "weight_kg": row[7] if len(row) > 7 else None,
+            "height_cm": row[8] if len(row) > 8 else None,
+            "activity_level": row[9] if len(row) > 9 else None,
+            "health_goals": row[10] if len(row) > 10 else None,
+            "dietary_restrictions": row[11] if len(row) > 11 else None,
+            "target_weight_kg": row[12] if len(row) > 12 else None,
+            "calculated_calorie_goal": row[13] if len(row) > 13 else None,
+            "custom_calorie_goal": row[14] if len(row) > 14 else None,
+            "active_calorie_goal": row[15] if len(row) > 15 else None,
         }
 
 
@@ -235,28 +237,33 @@ async def update_user(
 
 async def update_user_health(
     user_id: str,
-    is_pregnant: Optional[bool] = None,
-    is_lactating: Optional[bool] = None,
-    has_anemia: Optional[bool] = None,
     weight_kg: Optional[float] = None,
     height_cm: Optional[float] = None,
     activity_level: Optional[str] = None,
     health_goals: Optional[str] = None,
-    dietary_restrictions: Optional[str] = None
+    dietary_restrictions: Optional[str] = None,
+    target_weight_kg: Optional[float] = None,
+    calculated_calorie_goal: Optional[float] = None,
+    custom_calorie_goal: Optional[float] = None,
+    active_calorie_goal: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Update user health information.
 
+    NEW: Removed pregnancy/lactation/anemia fields completely!
+    Added: target_weight_kg, calculated_calorie_goal, custom_calorie_goal, active_calorie_goal
+
     Args:
         user_id: User identifier
-        is_pregnant: Pregnancy status
-        is_lactating: Lactation status
-        has_anemia: Anemia diagnosis
-        weight_kg: Weight in kilograms
+        weight_kg: Current weight in kilograms
         height_cm: Height in centimeters
         activity_level: Activity level (sedentary, light, moderate, active, very_active)
-        health_goals: Health goals text
+        health_goals: Health goals (lose_weight, gain_muscle, maintain_weight, general_wellness)
         dietary_restrictions: Dietary restrictions text
+        target_weight_kg: Goal weight (for weight loss/gain tracking)
+        calculated_calorie_goal: KAI's calculated calorie recommendation (BMR/TDEE-based)
+        custom_calorie_goal: User's manual calorie override
+        active_calorie_goal: The active calorie goal being used
 
     Returns:
         dict: Updated user health data
@@ -274,15 +281,6 @@ async def update_user_health(
         updates = []
         params = []
 
-        if is_pregnant is not None:
-            updates.append("is_pregnant = ?")
-            params.append(1 if is_pregnant else 0)
-        if is_lactating is not None:
-            updates.append("is_lactating = ?")
-            params.append(1 if is_lactating else 0)
-        if has_anemia is not None:
-            updates.append("has_anemia = ?")
-            params.append(1 if has_anemia else 0)
         if weight_kg is not None:
             updates.append("weight_kg = ?")
             params.append(weight_kg)
@@ -298,6 +296,18 @@ async def update_user_health(
         if dietary_restrictions is not None:
             updates.append("dietary_restrictions = ?")
             params.append(dietary_restrictions)
+        if target_weight_kg is not None:
+            updates.append("target_weight_kg = ?")
+            params.append(target_weight_kg)
+        if calculated_calorie_goal is not None:
+            updates.append("calculated_calorie_goal = ?")
+            params.append(calculated_calorie_goal)
+        if custom_calorie_goal is not None:
+            updates.append("custom_calorie_goal = ?")
+            params.append(custom_calorie_goal)
+        if active_calorie_goal is not None:
+            updates.append("active_calorie_goal = ?")
+            params.append(active_calorie_goal)
 
         if updates:
             updates.append("updated_at = ?")
@@ -315,20 +325,24 @@ async def update_user_health(
 
 async def get_user_health_profile(user_id: str) -> Dict[str, Any]:
     """
-    Get user health profile with RDA adjustments.
+    Get user health profile with RDV calculations.
 
-    Returns user health info plus calculated RDA values based on:
+    NEW: Uses BMR/TDEE-based calculations if profile is complete, otherwise uses basic RDV.
+    NO pregnancy/lactation adjustments - removed completely!
+
+    Returns user health info plus calculated RDV values based on:
     - Gender
     - Age
-    - Pregnancy status
-    - Lactation status
-    - Activity level
+    - Weight (if available)
+    - Height (if available)
+    - Activity level (if available)
+    - Health goals (if available)
 
     Args:
         user_id: User identifier
 
     Returns:
-        dict: User health profile with RDA values
+        dict: User health profile with RDV values
 
     Raises:
         ValueError: If user not found
@@ -337,59 +351,56 @@ async def get_user_health_profile(user_id: str) -> Dict[str, Any]:
     if not user:
         raise ValueError(f"User {user_id} not found")
 
-    # Calculate RDA values
-    gender = user["gender"]
-    age = user["age"]
-    is_pregnant = bool(user["is_pregnant"])
-    is_lactating = bool(user["is_lactating"])
+    # Check if profile is complete (has weight, height, activity, goals)
+    profile_complete = all([
+        user.get("weight_kg"),
+        user.get("height_cm"),
+        user.get("activity_level"),
+        user.get("health_goals")
+    ])
 
-    # Base RDA values for Nigerian women (WHO/FAO standards)
-    rdv = {
-        "calories": 2000,
-        "protein": 50,
-        "iron": 18,
-        "calcium": 1000,
-        "zinc": 8,
-        "vitamin_a": 700,
-    }
+    # Calculate RDV using appropriate method
+    if profile_complete:
+        # Use NEW BMR/TDEE-based calculation
+        from kai.utils.nutrition_rdv import calculate_user_rdv_v2
 
-    # Adjust for pregnancy
-    if is_pregnant:
-        rdv["calories"] += 300  # Additional 300 cal for pregnancy
-        rdv["protein"] += 10  # Additional protein
-        rdv["iron"] = 27  # Increased iron requirement
-        rdv["calcium"] = 1000  # Maintain calcium
-        rdv["vitamin_a"] = 770  # Slightly increased
-
-    # Adjust for lactation
-    if is_lactating:
-        rdv["calories"] += 500  # Additional 500 cal for lactation
-        rdv["protein"] += 25  # More protein for milk production
-        rdv["iron"] = 9  # Lower than pregnancy but still elevated
-        rdv["calcium"] = 1000
-        rdv["vitamin_a"] = 1300  # Significantly increased
-
-    # Adjust for males (if applicable)
-    if gender == "male":
-        rdv["calories"] = 2500
-        rdv["protein"] = 56
-        rdv["iron"] = 8  # Lower iron need for males
-        rdv["zinc"] = 11  # Higher zinc need
-        rdv["vitamin_a"] = 900
+        try:
+            rdv_result = calculate_user_rdv_v2(user)
+            rdv = rdv_result["rdv"]
+        except (ValueError, KeyError) as e:
+            logger.warning(f"Error calculating BMR/TDEE RDV for user {user_id}: {e}. Falling back to basic RDV.")
+            # Fall back to basic calculation
+            from kai.utils.nutrition_rdv import calculate_user_rdv
+            rdv = calculate_user_rdv({
+                "gender": user["gender"],
+                "age": user["age"],
+                "activity_level": user.get("activity_level", "moderate")
+            })
+    else:
+        # Use OLD basic calculation (no weight/height)
+        from kai.utils.nutrition_rdv import calculate_user_rdv
+        rdv = calculate_user_rdv({
+            "gender": user["gender"],
+            "age": user["age"],
+            "activity_level": user.get("activity_level", "moderate")
+        })
 
     return {
         "user_id": user_id,
+        "email": user.get("email"),
         "name": user["name"],
         "gender": user["gender"],
         "age": user["age"],
-        "is_pregnant": is_pregnant,
-        "is_lactating": is_lactating,
-        "has_anemia": bool(user["has_anemia"]),
-        "weight_kg": user["weight_kg"],
-        "height_cm": user["height_cm"],
-        "activity_level": user["activity_level"],
-        "health_goals": user["health_goals"],
-        "dietary_restrictions": user["dietary_restrictions"],
+        "weight_kg": user.get("weight_kg"),
+        "height_cm": user.get("height_cm"),
+        "activity_level": user.get("activity_level"),
+        "health_goals": user.get("health_goals"),
+        "dietary_restrictions": user.get("dietary_restrictions"),
+        "target_weight_kg": user.get("target_weight_kg"),
+        "calculated_calorie_goal": user.get("calculated_calorie_goal"),
+        "custom_calorie_goal": user.get("custom_calorie_goal"),
+        "active_calorie_goal": user.get("active_calorie_goal"),
+        "profile_complete": profile_complete,
         "rdv": rdv,
     }
 

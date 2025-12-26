@@ -27,6 +27,7 @@ import uuid
 import logging
 import traceback
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,15 +103,24 @@ async def health_check():
 @app.post("/api/v1/auth/signup")
 async def signup(
     email: str = Form(...),
-    name: str = Form(None),
-    gender: str = Form("female"),
-    age: int = Form(25)
+    name: str = Form(...),
+    gender: str = Form(...),
+    age: int = Form(...)
 ):
-    """Sign up new user and return JWT token"""
+    """
+    Sign up new user and return JWT token.
+
+    All fields are required for signup. Health profile (weight, height, activity, goals)
+    can be completed later via /api/v1/users/health-profile endpoint.
+    """
     user_id = str(uuid.uuid4())  # Generate UUID as user_id
 
+    # Validate name
+    if not name or not name.strip():
+        raise HTTPException(status_code=400, detail="Name is required and cannot be empty")
+
     # Validate and normalize gender
-    gender_normalized = gender.lower().strip() if gender else "female"
+    gender_normalized = gender.lower().strip()
     if gender_normalized not in ["male", "female"]:
         raise HTTPException(status_code=400, detail="Gender must be 'male' or 'female'")
 
@@ -348,7 +358,11 @@ async def get_meal_history(
 async def get_user_profile(
     user_id: str = Depends(get_current_user_id),  # Extract from JWT token
 ):
-    """Get user profile with health info and RDV values"""
+    """
+    Get user profile with health info and RDV values.
+
+    Returns profile_complete flag indicating if weight/height/activity/goals are set.
+    """
     start = time.time()
     try:
         profile = await get_user_health_profile(user_id)
@@ -364,14 +378,16 @@ async def get_user_profile(
             name=profile.get("name"),
             gender=profile["gender"],
             age=profile["age"],
-            is_pregnant=profile["is_pregnant"],
-            is_lactating=profile["is_lactating"],
-            has_anemia=profile["has_anemia"],
             weight_kg=profile.get("weight_kg"),
             height_cm=profile.get("height_cm"),
             activity_level=profile.get("activity_level"),
             health_goals=profile.get("health_goals"),
             dietary_restrictions=profile.get("dietary_restrictions"),
+            target_weight_kg=profile.get("target_weight_kg"),
+            calculated_calorie_goal=profile.get("calculated_calorie_goal"),
+            custom_calorie_goal=profile.get("custom_calorie_goal"),
+            active_calorie_goal=profile.get("active_calorie_goal"),
+            profile_complete=profile.get("profile_complete", False),
             rdv=profile["rdv"],
             processing_time_ms=int((time.time() - start) * 1000),
         )
@@ -386,7 +402,12 @@ async def update_user_profile_endpoint(
     request: UpdateUserProfileRequest,
     user_id: str = Depends(get_current_user_id),  # Extract from JWT token
 ):
-    """Update user profile and health information"""
+    """
+    Update user profile and health information.
+
+    For complete health profile updates (with BMR/TDEE calculations),
+    use /api/v1/users/health-profile endpoint instead.
+    """
     start = time.time()
     try:
         # Update user basic info
@@ -401,9 +422,6 @@ async def update_user_profile_endpoint(
 
         # Update health info
         if any([
-            request.is_pregnant is not None,
-            request.is_lactating is not None,
-            request.has_anemia is not None,
             request.weight_kg,
             request.height_cm,
             request.activity_level,
@@ -412,9 +430,6 @@ async def update_user_profile_endpoint(
         ]):
             await update_user_health(
                 user_id=user_id,
-                is_pregnant=request.is_pregnant,
-                is_lactating=request.is_lactating,
-                has_anemia=request.has_anemia,
                 weight_kg=request.weight_kg,
                 height_cm=request.height_cm,
                 activity_level=request.activity_level,
@@ -433,18 +448,181 @@ async def update_user_profile_endpoint(
             name=profile.get("name"),
             gender=profile["gender"],
             age=profile["age"],
-            is_pregnant=profile["is_pregnant"],
-            is_lactating=profile["is_lactating"],
-            has_anemia=profile["has_anemia"],
             weight_kg=profile.get("weight_kg"),
             height_cm=profile.get("height_cm"),
             activity_level=profile.get("activity_level"),
             health_goals=profile.get("health_goals"),
             dietary_restrictions=profile.get("dietary_restrictions"),
+            target_weight_kg=profile.get("target_weight_kg"),
+            calculated_calorie_goal=profile.get("calculated_calorie_goal"),
+            custom_calorie_goal=profile.get("custom_calorie_goal"),
+            active_calorie_goal=profile.get("active_calorie_goal"),
+            profile_complete=profile.get("profile_complete", False),
             rdv=profile["rdv"],
             processing_time_ms=int((time.time() - start) * 1000),
         )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/v1/users/health-profile")
+async def update_health_profile(
+    weight_kg: float = Form(..., description="Current weight in kilograms (30-300 kg)"),
+    height_cm: float = Form(..., description="Height in centimeters (100-250 cm)"),
+    activity_level: Literal["sedentary", "light", "moderate", "active", "very_active"] = Form(
+        ...,
+        description="Activity level: sedentary (little/no exercise), light (1-3 days/week), moderate (3-5 days/week), active (6-7 days/week), very_active (physical job/athlete)"
+    ),
+    health_goals: Literal["lose_weight", "gain_muscle", "maintain_weight", "general_wellness"] = Form(
+        ...,
+        description="Health goal: lose_weight, gain_muscle, maintain_weight, or general_wellness"
+    ),
+    target_weight_kg: float = Form(None, description="Goal weight for weight loss/gain tracking (optional)"),
+    custom_calorie_goal: float = Form(None, description="Override KAI's calculated calorie recommendation (optional)"),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Complete or update user's health profile for full personalization.
+
+    This endpoint enables BMR/TDEE-based calorie calculations and goal-specific coaching.
+
+    Required fields:
+        - weight_kg: Current weight (30-300 kg)
+        - height_cm: Height (100-250 cm)
+        - activity_level: Select from dropdown (sedentary, light, moderate, active, very_active)
+        - health_goals: Select from dropdown (lose_weight, gain_muscle, maintain_weight, general_wellness)
+
+    Optional fields:
+        - target_weight_kg: Goal weight for weight loss/gain tracking
+        - custom_calorie_goal: Override KAI's calculated calorie recommendation
+    """
+    start = time.time()
+
+    try:
+        # Validate required fields
+        if not all([weight_kg, height_cm, activity_level, health_goals]):
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: weight_kg, height_cm, activity_level, health_goals"
+            )
+
+        # Validate weight range
+        if weight_kg < 30 or weight_kg > 300:
+            raise HTTPException(
+                status_code=400,
+                detail="Weight must be between 30 and 300 kg"
+            )
+
+        # Validate height range
+        if height_cm < 100 or height_cm > 250:
+            raise HTTPException(
+                status_code=400,
+                detail="Height must be between 100 and 250 cm"
+            )
+
+        # Validate activity level
+        valid_activity_levels = ["sedentary", "light", "moderate", "active", "very_active"]
+        if activity_level not in valid_activity_levels:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid activity_level. Must be one of: {', '.join(valid_activity_levels)}"
+            )
+
+        # Validate health goals
+        valid_health_goals = ["lose_weight", "gain_muscle", "maintain_weight", "general_wellness"]
+        if health_goals not in valid_health_goals:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid health_goals. Must be one of: {', '.join(valid_health_goals)}"
+            )
+
+        # Get user profile first (needed for validation and RDV calculation)
+        user = await get_user(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User {user_id} not found. Please ensure you are logged in with a valid account."
+            )
+
+        # Treat 0 as None (user didn't provide custom goal)
+        if custom_calorie_goal == 0:
+            custom_calorie_goal = None
+
+        # Validate custom calorie goal if provided
+        if custom_calorie_goal is not None:
+            min_calories = 1200 if user.get("gender") == "female" else 1500
+
+            if custom_calorie_goal < min_calories:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Custom calorie goal is dangerously low. Minimum: {min_calories} kcal/day for {user.get('gender')}s. "
+                           f"Very low calorie diets should be medically supervised."
+                )
+
+            if custom_calorie_goal > 5000:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Custom calorie goal exceeds safe maximum (5000 kcal/day)"
+                )
+
+        # Import the new RDV calculation function
+        from kai.utils.nutrition_rdv import calculate_user_rdv_v2
+
+        # Build user profile for calculation
+        user_profile = {
+            "weight_kg": weight_kg,
+            "height_cm": height_cm,
+            "age": user.get("age"),
+            "gender": user.get("gender"),
+            "activity_level": activity_level,
+            "health_goals": health_goals,
+            "target_weight_kg": target_weight_kg,
+            "custom_calorie_goal": custom_calorie_goal
+        }
+
+        # Calculate personalized RDV using BMR/TDEE method
+        rdv_result = calculate_user_rdv_v2(user_profile)
+
+        # Update user_health table with new values
+        await update_user_health(
+            user_id=user_id,
+            weight_kg=weight_kg,
+            height_cm=height_cm,
+            activity_level=activity_level,
+            health_goals=health_goals,
+            target_weight_kg=target_weight_kg,
+            calculated_calorie_goal=rdv_result["recommended_calories"],
+            custom_calorie_goal=custom_calorie_goal,
+            active_calorie_goal=rdv_result["active_calories"],
+        )
+
+        # Build response
+        response = {
+            "success": True,
+            "message": "Health profile updated successfully",
+            "profile_complete": True,
+            "calculated_rdv": {
+                "bmr": rdv_result["bmr"],
+                "tdee": rdv_result["tdee"],
+                "recommended_calories": rdv_result["recommended_calories"],
+                "active_calories": rdv_result["active_calories"]
+            },
+            "processing_time_ms": int((time.time() - start) * 1000)
+        }
+
+        # Add weight projection if available
+        if "weight_projection" in rdv_result:
+            response["weight_projection"] = rdv_result["weight_projection"]
+
+        return response
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating health profile: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 

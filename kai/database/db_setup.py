@@ -55,15 +55,25 @@ async def initialize_database(db_path: Optional[Path] = None) -> None:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_health (
                 user_id TEXT PRIMARY KEY,
-                is_pregnant BOOLEAN DEFAULT 0,
-                is_lactating BOOLEAN DEFAULT 0,
-                has_anemia BOOLEAN DEFAULT 0,
+
+                -- Body Metrics (required for BMR/TDEE calculation)
                 weight_kg REAL,
                 height_cm REAL,
+
+                -- Lifestyle & Goals
                 activity_level TEXT CHECK(activity_level IN ('sedentary', 'light', 'moderate', 'active', 'very_active')),
-                health_goals TEXT,
+                health_goals TEXT CHECK(health_goals IN ('lose_weight', 'gain_muscle', 'maintain_weight', 'general_wellness')),
+                target_weight_kg REAL,
+
+                -- Calorie Goals (calculated and custom)
+                calculated_calorie_goal REAL,
+                custom_calorie_goal REAL,
+                active_calorie_goal REAL,
+
+                -- Other
                 dietary_restrictions TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         """)

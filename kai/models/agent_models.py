@@ -223,7 +223,12 @@ class MealHistoryResponse(BaseModel):
 
 
 class UserProfileResponse(BaseModel):
-    """Response with user profile"""
+    """
+    Response with user profile.
+
+    NEW: Removed pregnancy/lactation/anemia fields completely!
+    Added: profile_complete flag and new calorie goal fields
+    """
     success: bool
     message: str
     user_id: str
@@ -231,31 +236,35 @@ class UserProfileResponse(BaseModel):
     name: Optional[str] = None
     gender: str
     age: int
-    is_pregnant: bool = False
-    is_lactating: bool = False
-    has_anemia: bool = False
     weight_kg: Optional[float] = None
     height_cm: Optional[float] = None
     activity_level: Optional[str] = None
     health_goals: Optional[str] = None
     dietary_restrictions: Optional[str] = None
+    target_weight_kg: Optional[float] = None
+    calculated_calorie_goal: Optional[float] = None
+    custom_calorie_goal: Optional[float] = None
+    active_calorie_goal: Optional[float] = None
+    profile_complete: bool = False
     rdv: Dict[str, float] = Field(default_factory=dict)
     processing_time_ms: int = 0
 
 
 class UpdateUserProfileRequest(BaseModel):
-    """Request to update user profile"""
+    """
+    Request to update user profile.
+
+    NEW: Removed pregnancy/lactation/anemia fields!
+    Use /api/v1/users/health-profile endpoint for complete health profile updates.
+    """
     email: Optional[str] = None
     name: Optional[str] = None
     gender: Optional[Literal["male", "female"]] = None
     age: Optional[int] = None
-    is_pregnant: Optional[bool] = None
-    is_lactating: Optional[bool] = None
-    has_anemia: Optional[bool] = None
     weight_kg: Optional[float] = None
     height_cm: Optional[float] = None
     activity_level: Optional[Literal["sedentary", "light", "moderate", "active", "very_active"]] = None
-    health_goals: Optional[str] = None
+    health_goals: Optional[Literal["lose_weight", "gain_muscle", "maintain_weight", "general_wellness"]] = None
     dietary_restrictions: Optional[str] = None
 
 

@@ -15,7 +15,8 @@ Focus areas:
 import json
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
+from datetime import datetime
 from openai import AsyncOpenAI
 from agents import Agent
 from dotenv import load_dotenv
@@ -213,6 +214,141 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         logger.info(f"✓ Coaching Agent initialized with {len(tools)} tool(s)")
 
+    def _detect_meal_type(self, timestamp: Optional[datetime] = None) -> str:
+        """
+        Auto-detect meal type from timestamp.
+
+        Nigerian meal timing patterns:
+        - Breakfast: 6:00 AM - 10:30 AM
+        - Lunch: 11:00 AM - 3:00 PM
+        - Dinner: 5:00 PM - 10:00 PM
+        - Snack: Outside these windows
+
+        Args:
+            timestamp: Meal logging timestamp (defaults to now)
+
+        Returns:
+            "breakfast" | "lunch" | "dinner" | "snack"
+        """
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        hour = timestamp.hour
+
+        if 6 <= hour < 11:
+            return "breakfast"
+        elif 11 <= hour < 15:
+            return "lunch"
+        elif 17 <= hour < 22:
+            return "dinner"
+        else:
+            return "snack"
+
+    def _classify_meal_size(
+        self,
+        calories: float,
+        user_rdv_calories: float,
+        meal_type: str
+    ) -> Tuple[str, str]:
+        """
+        Classify meal as light/moderate/heavy based on calories and meal type.
+
+        Typical meal distribution:
+        - Breakfast: 20-25% of daily calories
+        - Lunch: 30-35% of daily calories
+        - Dinner: 30-35% of daily calories
+        - Snacks: 10-15% of daily calories
+
+        Args:
+            calories: Meal calories
+            user_rdv_calories: User's daily calorie target
+            meal_type: "breakfast" | "lunch" | "dinner" | "snack"
+
+        Returns:
+            (size_label, emoji) tuple
+            - size_label: "LIGHT MEAL" | "MODERATE MEAL" | "HEAVY MEAL"
+            - emoji: "🍃" | "🍽️" | "🍖"
+        """
+        meal_percentage = (calories / user_rdv_calories) * 100
+
+        # Different thresholds based on meal type
+        if meal_type == "breakfast":
+            # Breakfast: 20-25% is ideal
+            if meal_percentage < 18:
+                return "LIGHT BREAKFAST", "🍃"
+            elif meal_percentage < 28:
+                return "MODERATE BREAKFAST", "🍽️"
+            else:
+                return "HEAVY BREAKFAST", "🍖"
+
+        elif meal_type in ["lunch", "dinner"]:
+            # Lunch/Dinner: 30-35% is ideal
+            if meal_percentage < 25:
+                return "LIGHT MEAL", "🍃"
+            elif meal_percentage < 38:
+                return "MODERATE MEAL", "🍽️"
+            else:
+                return "HEAVY MEAL", "🍖"
+
+        else:  # snack
+            # Snacks: 10-15% is ideal
+            if meal_percentage < 8:
+                return "LIGHT SNACK", "🍃"
+            elif meal_percentage < 18:
+                return "MODERATE SNACK", "🍽️"
+            else:
+                return "HEAVY SNACK", "🍖"
+
+    def _normalize_percentage_for_display(
+        self,
+        actual_percentage: float,
+        nutrient_name: str
+    ) -> Tuple[float, str]:
+        """
+        Normalize percentage to 100% scale with context badge.
+
+        Args:
+            actual_percentage: Raw percentage (can be >100%)
+            nutrient_name: Name of nutrient (for context)
+
+        Returns:
+            (display_percentage, badge) tuple
+            - display_percentage: Capped at 100%
+            - badge: "" | "DAILY GOAL MET!" | "DAILY GOAL EXCEEDED!"
+        """
+        if actual_percentage >= 120:
+            return 100.0, f"DAILY GOAL EXCEEDED! ({actual_percentage:.0f}% of needs)"
+        elif actual_percentage >= 100:
+            return 100.0, f"DAILY GOAL MET! ({actual_percentage:.0f}% of needs)"
+        else:
+            return actual_percentage, ""
+
+    def _format_nutrient_with_normalization(
+        self,
+        nutrient_name: str,
+        actual_value: float,
+        rdv_value: float,
+        unit: str
+    ) -> str:
+        """
+        Format a nutrient line with normalized percentage display.
+
+        Args:
+            nutrient_name: Display name (e.g., "Protein")
+            actual_value: Actual amount consumed
+            rdv_value: RDV target
+            unit: Unit string (e.g., "g", "mg", "mcg")
+
+        Returns:
+            Formatted string with normalized percentage
+        """
+        actual_pct = (actual_value / rdv_value * 100) if rdv_value > 0 else 0
+        display_pct, badge = self._normalize_percentage_for_display(actual_pct, nutrient_name)
+
+        badge_text = f" ✅ {badge}" if badge else ""
+
+        return f"- {nutrient_name}: {actual_value:.1f}{unit} ({display_pct:.0f}% of daily {rdv_value:.1f}{unit}){badge_text}"
+
     async def provide_coaching(
         self,
         user_id: str,
@@ -263,13 +399,40 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 user_stats = await get_user_stats(user_id)
                 food_frequency = await get_user_food_frequency(user_id, top_n=10)
 
-            # Calculate personalized RDV
-            user_profile = {
-                "gender": user.get("gender", "female"),
-                "age": user.get("age", 25),
-                "activity_level": user_context.get("activity_level", "moderate")
-            }
-            user_rdv = calculate_user_rdv(user_profile)
+            # Calculate personalized RDV using NEW BMR/TDEE system if profile complete
+            # Check if user has complete health profile (weight, height, activity, goals)
+            has_complete_profile = all([
+                user.get("weight_kg"),
+                user.get("height_cm"),
+                user.get("activity_level"),
+                user.get("health_goals")
+            ])
+
+            if has_complete_profile:
+                # Use NEW BMR/TDEE-based calculation (v2)
+                from kai.utils.nutrition_rdv import calculate_user_rdv_v2
+                try:
+                    rdv_result = calculate_user_rdv_v2(user)
+                    user_rdv = rdv_result["rdv"]
+                    logger.info(f"✓ Using BMR/TDEE-based RDV (complete profile): {user_rdv['calories']} kcal")
+                except Exception as e:
+                    logger.warning(f"Error calculating BMR/TDEE RDV: {e}. Falling back to basic RDV.")
+                    # Fall back to basic calculation
+                    user_profile = {
+                        "gender": user.get("gender", "female"),
+                        "age": user.get("age", 25),
+                        "activity_level": user.get("activity_level", "moderate")
+                    }
+                    user_rdv = calculate_user_rdv(user_profile)
+            else:
+                # Use OLD basic calculation (no weight/height)
+                user_profile = {
+                    "gender": user.get("gender", "female"),
+                    "age": user.get("age", 25),
+                    "activity_level": user_context.get("activity_level", user.get("activity_level", "moderate"))
+                }
+                user_rdv = calculate_user_rdv(user_profile)
+                logger.info(f"⚠️  Using basic RDV (incomplete profile). Recommend user completes health profile.")
 
             # Detect learning phase
             is_learning_phase = not user_stats.get("learning_phase_complete", False)
@@ -435,6 +598,21 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         food_list = ", ".join(foods_eaten)
 
+        # Detect meal type from timestamp (with optional override)
+        timestamp = user_context.get("timestamp") if user_context else None
+        meal_type = user_context.get("meal_type") if user_context else None
+        if not meal_type:
+            meal_type = self._detect_meal_type(timestamp)
+        logger.info(f"   Meal type detected: {meal_type}")
+
+        # Classify meal size
+        meal_size, size_emoji = self._classify_meal_size(
+            knowledge_result.total_calories,
+            user_rdv.get('calories', 2500),
+            meal_type
+        )
+        logger.info(f"   Meal size: {meal_size} {size_emoji}")
+
         # Classify current meal quality
         meal_quality, high_nutrients, low_nutrients = self._classify_meal_quality(
             knowledge_result, user_rdv
@@ -466,7 +644,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             poor_meal_count=poor_meal_count,
             streak_status=streak_status,
             workflow_type=workflow_type,
-            tavily_context=tavily_context
+            tavily_context=tavily_context,
+            meal_type=meal_type,
+            meal_size=meal_size,
+            size_emoji=size_emoji
         )
 
         # Call GPT-4o for dynamic coaching
@@ -522,7 +703,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         poor_meal_count: int,
         streak_status: str,
         workflow_type: str = "food_logging",
-        tavily_context: Optional[str] = None
+        tavily_context: Optional[str] = None,
+        meal_type: str = "lunch",
+        meal_size: str = "MODERATE MEAL",
+        size_emoji: str = "🍽️"
     ) -> str:
         """Build dynamic system prompt for GPT-4o coaching generation.
 
@@ -596,16 +780,38 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 - Foods user eats often: {top_foods_str}
 - Current meal: {food_list}
 
-**Current Meal Nutrition (What User Just Logged):**
-This meal contains:
-- Calories: {knowledge_result.total_calories:.0f} kcal ({(knowledge_result.total_calories/user_rdv.get('calories',2500)*100):.0f}% of daily {user_rdv.get('calories',0):.0f} kcal)
-- Protein: {knowledge_result.total_protein:.1f}g ({(knowledge_result.total_protein/user_rdv.get('protein',60)*100):.0f}% of daily {user_rdv.get('protein',0):.1f}g)
-- Carbs: {knowledge_result.total_carbohydrates:.1f}g ({(knowledge_result.total_carbohydrates/user_rdv.get('carbs',325)*100):.0f}% of daily {user_rdv.get('carbs',0):.1f}g)
-- Fat: {knowledge_result.total_fat:.1f}g ({(knowledge_result.total_fat/user_rdv.get('fat',70)*100):.0f}% of daily {user_rdv.get('fat',0):.1f}g)
-- Iron: {knowledge_result.total_iron:.1f}mg ({(knowledge_result.total_iron/user_rdv.get('iron',18)*100):.0f}% of daily {user_rdv.get('iron',0):.1f}mg)
-- Calcium: {knowledge_result.total_calcium:.1f}mg ({(knowledge_result.total_calcium/user_rdv.get('calcium',1000)*100):.0f}% of daily {user_rdv.get('calcium',0):.1f}mg)
-- Vitamin A: {knowledge_result.total_vitamin_a:.1f}mcg ({(knowledge_result.total_vitamin_a/user_rdv.get('vitamin_a',800)*100):.0f}% of daily {user_rdv.get('vitamin_a',0):.1f}mcg)
-- Zinc: {knowledge_result.total_zinc:.1f}mg ({(knowledge_result.total_zinc/user_rdv.get('zinc',8)*100):.0f}% of daily {user_rdv.get('zinc',0):.1f}mg)
+**Current Meal Context:**
+- Meal Type: {meal_type.upper()}
+- Meal Size: {meal_size} {size_emoji} ({knowledge_result.total_calories:.0f} kcal = {(knowledge_result.total_calories/user_rdv.get('calories',2500)*100):.0f}% of daily needs)
+- Calories Remaining Today: ~{user_rdv.get('calories',2500) - knowledge_result.total_calories:.0f} kcal for remaining meals
+
+**Current Meal Nutrition (NORMALIZED TO 100% SCALE):**
+All percentages are capped at 100% to avoid confusion. If a nutrient shows 100%, it may have EXCEEDED daily needs (good for this ONE meal).
+
+{self._format_nutrient_with_normalization(
+    "Calories", knowledge_result.total_calories, user_rdv.get('calories', 2500), "kcal"
+)}
+{self._format_nutrient_with_normalization(
+    "Protein", knowledge_result.total_protein, user_rdv.get('protein', 60), "g"
+)}
+{self._format_nutrient_with_normalization(
+    "Carbs", knowledge_result.total_carbohydrates, user_rdv.get('carbs', 325), "g"
+)}
+{self._format_nutrient_with_normalization(
+    "Fat", knowledge_result.total_fat, user_rdv.get('fat', 70), "g"
+)}
+{self._format_nutrient_with_normalization(
+    "Iron", knowledge_result.total_iron, user_rdv.get('iron', 18), "mg"
+)}
+{self._format_nutrient_with_normalization(
+    "Calcium", knowledge_result.total_calcium, user_rdv.get('calcium', 1000), "mg"
+)}
+{self._format_nutrient_with_normalization(
+    "Vitamin A", knowledge_result.total_vitamin_a, user_rdv.get('vitamin_a', 800), "mcg"
+)}
+{self._format_nutrient_with_normalization(
+    "Zinc", knowledge_result.total_zinc, user_rdv.get('zinc', 8), "mg"
+)}
 
 **Meal Quality Assessment:**
 - Quality: {meal_quality.upper()}
@@ -646,10 +852,15 @@ This meal contains:
 Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
 {{
     "personalized_message": "3-4 sentence message that MUST include:
-        1. Opening celebration/acknowledgment with emojis 🎉
-        2. Nutrient overview highlighting 2-3 HIGH nutrients from current meal with percentages and emojis
-        3. Mention 1-2 LOW nutrients from current meal (if any) - tone depends on quality and phase
-        4. Closing encouragement or action item
+        1. Opening with meal context: '{meal_size} for {meal_type}!' (e.g., 'MODERATE MEAL for lunch! 🍽️')
+        2. Nutrient overview highlighting 2-3 HIGH nutrients - MUST include at least 1 MACRONUTRIENT (protein/carbs/fat)
+        3. Mention 1-2 LOW nutrients (if any) - tone depends on quality and phase
+        4. Context about remaining meals (e.g., 'You have ~1,800 kcal left for dinner + snacks')
+
+        CRITICAL MACRONUTRIENT RULE:
+        - ALWAYS mention at least ONE of: protein, carbs, OR fat in the nutrient overview
+        - Don't ONLY talk about micronutrients (iron, calcium, vitamin A, zinc)
+        - Balance is key: highlight both macros AND micros
 
         Emoji Guide (USE THESE):
         - 🎉 celebrations
@@ -661,6 +872,16 @@ Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
         - 🦴 calcium
         - 👁️ vitamin A
         - ✨ zinc
+        - 🍃 light meals
+        - 🍽️ moderate meals
+        - 🍖 heavy meals
+
+        MEAL CONTEXT AWARENESS:
+        - For BREAKFAST: Comment on energy for the day ahead
+        - For LUNCH: Comment on afternoon fuel and productivity
+        - For DINNER: Comment on recovery and sleep preparation
+        - For HEAVY meals: Suggest balancing with lighter meals later
+        - For LIGHT meals: Reassure it's okay, mention room for larger meals later
 
         TONE BASED ON MEAL QUALITY AND PHASE:
         {self._get_tone_instructions(meal_quality, streak_status, is_learning_phase)}",
@@ -668,8 +889,8 @@ Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
     "motivational_tip": "Short encouraging tip with emojis. Include streak celebration if relevant (e.g., '5-day streak! 🔥'). Max 1-2 sentences.",
 
     "next_steps": [
-        "Simple actionable step related to meal quality or primary gap (with emoji)",
-        "Budget-aware food suggestion (with emoji)",
+        "Meal-context-aware suggestion (e.g., for breakfast: 'Add protein to lunch for sustained energy')",
+        "Dynamic food suggestion based on user's meal history and gaps (check foods user eats often, suggest similar items)",
         "Logging encouragement or streak reminder (with emoji)"
     ]
 }}
@@ -684,13 +905,18 @@ Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
 1. USE EMOJIS LIBERALLY throughout all fields (personalized_message, motivational_tip, next_steps)
 2. Be warm, supportive, and culturally aware
 3. Use Nigerian food names and context
-4. ALWAYS include nutrient overview in personalized_message (what meal is HIGH in, what it LACKS)
-5. Reference user's actual history (foods they eat, trends) when relevant
+4. ALWAYS include at least 1 MACRONUTRIENT (protein/carbs/fat) + micronutrients in overview
+5. Reference user's actual history (foods they eat, trends) when making suggestions
 6. Celebrate improvements and streaks in motivational_tip
 7. Keep ALL messages concise (personalized_message: 3-4 sentences, motivational_tip: 1-2 sentences, next_steps: 3 simple items)
 8. Focus on budget-aware recommendations ({budget} budget)
-9. Adjust tone based on meal quality (see tone instructions above)
-10. next_steps should be SIMPLE actions, NO research citations
+9. Adjust tone based on meal quality AND meal type (breakfast/lunch/dinner)
+10. next_steps should include DYNAMIC food suggestions based on:
+    - Foods user eats often: {top_foods_str}
+    - Primary nutritional gap: {primary_gap}
+    - User's dietary patterns (NOT hardcoded suggestions!)
+11. Example good next_step: "I noticed you love Jollof Rice - add sardines next time for calcium 🦴"
+12. Example bad next_step: "Add calcium-rich foods" (too vague, not personalized)
 
 Generate the JSON now:"""
 
