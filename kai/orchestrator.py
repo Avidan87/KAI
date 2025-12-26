@@ -222,6 +222,12 @@ async def handle_user_request(
                     logger.error(f"Database operations error: {db_error}")
                     daily_totals = None
                     health_profile = None
+
+            except Exception as db_error:
+                logger.error(f"Database error: {db_error}")
+                # Continue without database (don't fail the request)
+                daily_totals = None
+                health_profile = None
         else:
             daily_totals = None
             health_profile = None
