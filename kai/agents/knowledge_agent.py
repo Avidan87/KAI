@@ -303,7 +303,11 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
                 "common_pairings": [],
                 "dietary_flags": dietary_flags,
                 "price_tier": metadata.get("price_tier", "mid"),
-                "similarity_score": match.get("similarity", 1.0)
+                "similarity_score": match.get("similarity", 1.0),
+                # Include portion limits from v2 database for validation
+                "typical_portion_g": metadata.get("typical_portion_g", 150),
+                "min_reasonable_g": metadata.get("min_reasonable_g", 50),
+                "max_reasonable_g": metadata.get("max_reasonable_g", 300),
             }
 
             foods_data.append(food_data)

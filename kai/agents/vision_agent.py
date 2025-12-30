@@ -19,8 +19,8 @@ from dotenv import load_dotenv
 import os
 
 from kai.models import VisionResult, DetectedFood
-from kai.mcp_servers.midas_railway_client import get_portion_estimate
-from kai.agents.florence_bbox import FlorenceBBoxDetector
+from kai.mcp_servers.depth_estimation_client import get_portion_estimate
+from kai.agents.florence_bbox import FlorenceBBoxDetector, split_oversized_bbox, merge_nearby_bboxes
 import numpy as np
 from PIL import Image
 
@@ -252,7 +252,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             # Parse tool result
             result_dict = json.loads(result_json)
 
-            midas_used = False
+            depth_estimation_used = False
             portion_grams = None
 
             # (We need detected_foods info for portion logic)
@@ -315,7 +315,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         MAX_REASONABLE_PORTION_PER_FOOD = 600.0  # Reduced from 1000g - realistic per-food max
                         img_height, img_width = img_array.shape[:2]
 
-                        # ⚡ OPTIMIZATION: Parallelize MiDaS calls for all foods
+                        # ⚡ OPTIMIZATION: Parallelize depth estimation calls for all foods
                         # Prepare all crop data first (fast, local operations)
                         async def estimate_single_portion(idx, food):
                             """Estimate portion for a single food item"""
@@ -332,8 +332,31 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 if bbox_area_ratio > 0.7:
                                     logger.warning(
                                         f"⚠️ {food.get('name')}: bbox covers {bbox_area_ratio:.1%} of image "
-                                        f"(likely entire plate, not individual food item)"
+                                        f"(likely entire plate, not individual food item). Attempting intelligent split..."
                                     )
+
+                                    # Try to split oversized bbox using K-Means clustering
+                                    sub_bboxes = split_oversized_bbox(
+                                        image=img_array,
+                                        bbox=bbox,
+                                        num_expected_foods=len(detected_foods),
+                                        area_threshold=0.7
+                                    )
+
+                                    if sub_bboxes and len(sub_bboxes) > 0:
+                                        # Successfully split! Estimate largest region (likely the actual food)
+                                        logger.info(f"✅ Split into {len(sub_bboxes)} regions, using largest for {food.get('name')}")
+
+                                        # Use largest region for this food (sorted by area already)
+                                        best_bbox = sub_bboxes[0]["bbox"]
+                                        x1, y1, x2, y2 = [int(c) for c in best_bbox]
+
+                                        # Continue with this sub-bbox (don't return, let it process below)
+                                        logger.info(f"   Using sub-bbox covering {sub_bboxes[0]['area_ratio']:.1%} of original")
+                                    else:
+                                        # Splitting failed, use conservative fallback
+                                        logger.warning(f"⚠️ Bbox splitting failed, using 150g fallback")
+                                        return 150.0
 
                                 # Crop image to food region
                                 cropped = img_array[y1:y2, x1:x2]
@@ -367,9 +390,9 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 logger.warning(f"⚠️ No bbox for {food.get('name')}, using default 250g")
                                 return 250.0
 
-                        # Run all MiDaS calls in parallel (with semaphore to limit concurrent requests)
+                        # Run all depth estimation calls in parallel (with semaphore to limit concurrent requests)
                         import asyncio
-                        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent MiDaS calls to avoid overloading Railway
+                        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent calls to avoid overloading Railway
 
                         async def limited_estimate(idx, food):
                             async with semaphore:
@@ -405,7 +428,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         else:
                             logger.info(f"✅ Total meal portion {total_estimated:.0f}g is reasonable")
 
-                        midas_used = True
+                        depth_estimation_used = True
 
                     except Exception as e:
                         logger.error(f"❌ Florence-2 failed: {e}, falling back to division method")
@@ -432,17 +455,17 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                             portion_per_food = portion_grams / num_foods if num_foods > 0 else portion_grams
 
                             logger.info(f"✅ Fallback: {portion_grams}g total → {portion_per_food:.1f}g per food")
-                            midas_used = True
+                            depth_estimation_used = True
 
                             for food in detected_foods:
                                 food["estimated_grams"] = portion_per_food
                         else:
-                            logger.warning("⚠️ MiDaS MCP returned invalid portion")
+                            logger.warning("⚠️ Depth estimation MCP returned invalid portion")
                     except Exception as e:
-                        logger.error(f"❌ MiDaS fallback failed: {e}")
-                        midas_used = False
-            # Now, build the VisionResult from result_dict and correct midas_used
-            vision_result = self._parse_detection_result(result_dict, midas_used=midas_used)
+                        logger.error(f"❌ Depth estimation fallback failed: {e}")
+                        depth_estimation_used = False
+            # Now, build the VisionResult from result_dict and correct depth_estimation_used
+            vision_result = self._parse_detection_result(result_dict, depth_estimation_used=depth_estimation_used)
             return vision_result
         except Exception as ex:
             logger.exception(f"VisionAgent.analyze_image failed: {str(ex)}")
@@ -590,13 +613,13 @@ Be specific about Nigerian dishes, not generic descriptions!"""
 
 Be specific about Nigerian dishes, not generic descriptions!"""
 
-    def _parse_detection_result(self, result_dict: Dict[str, Any], midas_used: bool = False) -> VisionResult:
+    def _parse_detection_result(self, result_dict: Dict[str, Any], depth_estimation_used: bool = False) -> VisionResult:
         """
         Parse JSON result into VisionResult model.
 
         Args:
             result_dict: Parsed JSON from GPT-4o
-            midas_used: Boolean indicating if MiDaS was used for portion estimation
+            depth_estimation_used: Boolean indicating if depth estimation was used for portion estimation
 
         Returns:
             Structured VisionResult
@@ -622,7 +645,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             overall_confidence=result_dict.get("overall_confidence", 0.7),
             needs_clarification=result_dict.get("needs_clarification", False),
             clarification_questions=result_dict.get("clarification_questions", []),
-            midas_used=midas_used
+            depth_estimation_used=depth_estimation_used
         )
 
     def validate_image_quality(self, image_base64: str) -> Dict[str, Any]:

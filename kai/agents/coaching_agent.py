@@ -399,6 +399,9 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 user_stats = await get_user_stats(user_id)
                 food_frequency = await get_user_food_frequency(user_id, top_n=10)
 
+            # Extract user health goals for goal-aligned coaching
+            user_health_goals = user.get("health_goals") if user else None
+
             # Calculate personalized RDV using NEW BMR/TDEE system if profile complete
             # Check if user has complete health profile (weight, height, activity, goals)
             has_complete_profile = all([
@@ -518,7 +521,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 food_frequency=food_frequency,
                 user_context=user_context or {},
                 workflow_type=workflow_type,
-                tavily_context=tavily_context  # Pass Tavily research to GPT-4o
+                tavily_context=tavily_context,  # Pass Tavily research to GPT-4o
+                user_health_goals=user_health_goals  # NEW: Pass health goals for goal-aligned coaching
             )
 
             # Store Tavily sources in coaching_data for orchestrator
@@ -559,7 +563,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         food_frequency: List[Dict],
         user_context: Dict[str, Any],
         workflow_type: str = "food_logging",
-        tavily_context: Optional[str] = None
+        tavily_context: Optional[str] = None,
+        user_health_goals: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate dynamic coaching using GPT-4o based on user history and current meal.
@@ -647,7 +652,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             tavily_context=tavily_context,
             meal_type=meal_type,
             meal_size=meal_size,
-            size_emoji=size_emoji
+            size_emoji=size_emoji,
+            user_health_goals=user_health_goals  # NEW: Pass health goals to prompt
         )
 
         # Call GPT-4o for dynamic coaching
@@ -706,7 +712,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         tavily_context: Optional[str] = None,
         meal_type: str = "lunch",
         meal_size: str = "MODERATE MEAL",
-        size_emoji: str = "🍽️"
+        size_emoji: str = "🍽️",
+        user_health_goals: Optional[str] = None
     ) -> str:
         """Build dynamic system prompt for GPT-4o coaching generation.
 
@@ -720,6 +727,35 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         # Extract top foods user eats
         top_foods = [f["food_name"] for f in food_frequency[:5]] if food_frequency else []
         top_foods_str = ", ".join(top_foods) if top_foods else "No history yet"
+
+        # Build health goal guidance based on user's goals
+        health_goal_guidance = ""
+        if user_health_goals:
+            goal_lower = user_health_goals.lower()
+            if "lose" in goal_lower or "weight" in goal_lower and "loss" in goal_lower:
+                health_goal_guidance = """
+**⚖️ WEIGHT LOSS GOAL ACTIVE:**
+- User MUST stay under daily calorie target for deficit
+- Prioritize high-protein, low-calorie meals for satiety
+- FLAG high-calorie meals honestly - don't celebrate them
+- Suggest lighter Nigerian alternatives (grilled vs fried, skip swallow, etc.)
+- Track calories remaining for day - warn if running over budget"""
+            elif "gain" in goal_lower or "muscle" in goal_lower:
+                health_goal_guidance = """
+**💪 MUSCLE GAIN GOAL ACTIVE:**
+- User needs calorie SURPLUS and high protein (1.6-2.2g/kg)
+- Celebrate high-protein meals
+- Suggest protein-rich Nigerian combos (fish, chicken, beans, moin moin)
+- Flag low-protein meals as missed opportunities"""
+            elif "pregnan" in goal_lower:
+                health_goal_guidance = """
+**🤰 PREGNANCY NUTRITION GOAL:**
+- CRITICAL: Iron (27mg), Calcium (1000mg), Folate
+- Avoid empty calories - nutrient density is key
+- FLAG low iron/calcium meals firmly
+- Suggest pregnancy-safe Nigerian foods rich in these nutrients"""
+            else:
+                health_goal_guidance = f"\n**USER GOAL:** {user_health_goals}\n- Tailor all feedback to support this goal\n"
 
         # Build nutrient gap summary
         gap_summary = []
@@ -848,75 +884,94 @@ All percentages are capped at 100% to avoid confusion. If a nutrient shows 100%,
 
 **Primary Focus:** {primary_gap.upper()}
 
+{health_goal_guidance}
+
+**NIGERIAN MEAL COMBO KNOWLEDGE BASE:**
+Generate smart meal combos using Nigerian foods. Examples available:
+- Ugu soup (8.2mg iron, 24g protein per 300g)
+- Jollof Rice (145 cal, 2.6g protein per 100g)
+- Grilled Fish (35g protein, 120mg calcium per 200g)
+- Eba (330 cal, 78g carbs per 200g)
+- Egusi Soup (18g protein, 6mg iron per 250g)
+- Moin Moin (15g protein, 180mg calcium per 200g)
+- Efo Riro (7.4mg iron, 380μg vitamin A per 250g)
+- Fried Plantain (1127μg vitamin A per 100g)
+- Grilled Chicken (37.5g protein per 150g)
+- Beans (12g protein, 4.6mg iron per cup)
+
+**MEAL COMBO GENERATION RULES:**
+1. Generate ONE complete Nigerian meal combo for next meal
+2. Combo format: "Main dish (portion) + Protein source (portion) ± Swallow/Side (portion)"
+3. Target user's PRIMARY nutrient gap: {primary_gap}
+4. Respect health goal{' - WEIGHT LOSS: keep combo under 500-600 cal' if user_health_goals and 'lose' in user_health_goals.lower() else ''}
+5. Include realistic Nigerian portions
+6. Calculate total nutrients for the combo
+
+Example combos:
+- "Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)" = 8mg iron, 45g protein, 520 cal
+- "Efo riro (250g) + Fish (150g) - skip swallow" = 7mg iron, 30g protein, 320 cal (weight loss friendly)
+- "Jollof Rice (200g) + Grilled chicken (150g)" = 38g protein, 650 cal
+
 **Your Task:**
-Generate a SIMPLIFIED JSON response for food logging with ONLY these fields:
+Generate a CONCISE, HONEST JSON response with ONLY these fields:
 {{
-    "personalized_message": "3-4 sentence message that MUST include:
-        1. Opening with meal context: '{meal_size} for {meal_type}!' (e.g., 'MODERATE MEAL for lunch! 🍽️')
-        2. Nutrient overview highlighting 2-3 HIGH nutrients - MUST include at least 1 MACRONUTRIENT (protein/carbs/fat)
-        3. Mention 1-2 LOW nutrients (if any) - tone depends on quality and phase
-        4. Context about remaining meals (e.g., 'You have ~1,800 kcal left for dinner + snacks')
+    "message": "2-3 sentences max. HONEST assessment of meal quality - don't celebrate if meal is poor.
+                Mention what's good, what's missing. Reference health goal if relevant: {user_health_goals or 'general wellness'}.
+                Keep it real and helpful. Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ vitamin A, ⚡ calories.
 
-        CRITICAL MACRONUTRIENT RULE:
-        - ALWAYS mention at least ONE of: protein, carbs, OR fat in the nutrient overview
-        - Don't ONLY talk about micronutrients (iron, calcium, vitamin A, zinc)
-        - Balance is key: highlight both macros AND micros
+                Examples:
+                - GOOD meal: '{meal_size} for {meal_type}! Great protein (30g 💪) and iron (8mg 🩸). You have 1050 kcal left for dinner.'
+                - POOR meal: 'This Jollof Rice (800 cal ⚡) puts you over your weight loss budget. Low in protein (8g) and iron (2mg). For dinner, eat lighter to stay on track.'
+                - OKAY meal: '{meal_size} for {meal_type}. Decent carbs (45g 🍚) but low protein (6g). Add fish or chicken next time for balance.'",
 
-        Emoji Guide (USE THESE):
-        - 🎉 celebrations
-        - ⚡ energy/calories
-        - 💪 protein
-        - 🍚 carbs
-        - 🥑 healthy fats
-        - 🩸 iron
-        - 🦴 calcium
-        - 👁️ vitamin A
-        - ✨ zinc
-        - 🍃 light meals
-        - 🍽️ moderate meals
-        - 🍖 heavy meals
+    "next_meal_combo": {{
+        "combo": "ONE specific Nigerian meal combo from knowledge base. Format: 'Main dish (portion) + Protein (portion) ± Side (portion)'.
+                  Example: 'Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)' OR 'Efo riro (250g) + Fish (150g) - skip swallow' (for weight loss)",
 
-        MEAL CONTEXT AWARENESS:
-        - For BREAKFAST: Comment on energy for the day ahead
-        - For LUNCH: Comment on afternoon fuel and productivity
-        - For DINNER: Comment on recovery and sleep preparation
-        - For HEAVY meals: Suggest balancing with lighter meals later
-        - For LIGHT meals: Reassure it's okay, mention room for larger meals later
+        "why": "One sentence explaining how this combo closes {primary_gap} gap and fits {user_health_goals or 'goal'}.
+                Example: 'Only 320 cal, gives you 7mg iron + 30g protein without breaking calorie budget'",
 
-        TONE BASED ON MEAL QUALITY AND PHASE:
-        {self._get_tone_instructions(meal_quality, streak_status, is_learning_phase)}",
+        "nutrients": {{
+            "calories": 0,  // Total calories for the combo
+            "protein": 0,   // Total protein in grams
+            "{primary_gap}": 0  // Amount of primary gap nutrient (iron/calcium/vitamin_a/zinc)
+        }},
 
-    "motivational_tip": "Short encouraging tip with emojis. Include streak celebration if relevant (e.g., '5-day streak! 🔥'). Max 1-2 sentences.",
+        "estimated_cost": "₦XXX-YYY"  // Realistic Nigerian market price
+    }},
 
-    "next_steps": [
-        "Meal-context-aware suggestion (e.g., for breakfast: 'Add protein to lunch for sustained energy')",
-        "Dynamic food suggestion based on user's meal history and gaps (check foods user eats often, suggest similar items)",
-        "Logging encouragement or streak reminder (with emoji)"
-    ]
+    "goal_progress": {{
+        "type": "{user_health_goals or 'general_wellness'}",  // User's actual health goal
+        "status": "excellent | on_track | needs_attention",  // Honest assessment
+        "message": "One sentence about progress toward goal.
+                    Examples:
+                    - Weight loss: 'You're at 1650/1800 cal today - only 150 left for dinner. Stay disciplined!'
+                    - Muscle gain: 'Great protein today (95g/120g target). One more high-protein meal and you're there!'
+                    - Pregnancy: 'Iron at 18mg/27mg target. Tonight's combo will get you to 26mg - almost there!'"
+    }}
 }}
 
-**IMPORTANT - DO NOT INCLUDE:**
-- ❌ nutrient_insights array (redundant - already in personalized_message)
-- ❌ meal_suggestions (not needed for quick logging)
-- ❌ Research paper citations or sources
-- ❌ tone field
+**CRITICAL HONESTY RULES:**
+1. DO NOT celebrate every meal - be honest about quality
+2. If meal is poor (low protein, high calories, minimal nutrients):
+   - State it clearly: "This meal is low in protein and nutrients"
+   - Explain why it's problematic for their goal
+   - Suggest better alternatives in next_meal_combo
+3. Only celebrate when meal is genuinely good
+4. Patterns matter: If user has 3 poor meals in a row, be FIRM and direct
 
-**Guidelines:**
-1. USE EMOJIS LIBERALLY throughout all fields (personalized_message, motivational_tip, next_steps)
-2. Be warm, supportive, and culturally aware
-3. Use Nigerian food names and context
-4. ALWAYS include at least 1 MACRONUTRIENT (protein/carbs/fat) + micronutrients in overview
-5. Reference user's actual history (foods they eat, trends) when making suggestions
-6. Celebrate improvements and streaks in motivational_tip
-7. Keep ALL messages concise (personalized_message: 3-4 sentences, motivational_tip: 1-2 sentences, next_steps: 3 simple items)
-8. Focus on budget-aware recommendations ({budget} budget)
-9. Adjust tone based on meal quality AND meal type (breakfast/lunch/dinner)
-10. next_steps should include DYNAMIC food suggestions based on:
-    - Foods user eats often: {top_foods_str}
-    - Primary nutritional gap: {primary_gap}
-    - User's dietary patterns (NOT hardcoded suggestions!)
-11. Example good next_step: "I noticed you love Jollof Rice - add sardines next time for calcium 🦴"
-12. Example bad next_step: "Add calcium-rich foods" (too vague, not personalized)
+**NEXT MEAL COMBO REQUIREMENTS:**
+1. MUST suggest ONE complete Nigerian meal combo (not individual foods)
+2. Combo MUST target user's TOP nutrient gap: {primary_gap}
+3. Combo MUST fit user's health goal{' (WEIGHT LOSS: keep under 600 cal, prioritize protein)' if user_health_goals and 'lose' in user_health_goals.lower() else ''}
+4. Use foods from knowledge base (Ugu soup, Efo riro, Egusi, Jollof, Eba, Fish, Chicken, Moin Moin, Plantain, Beans)
+5. Include realistic portion sizes and calculate total nutrients accurately
+6. Format: "Food 1 (portion) + Food 2 (portion) = X nutrients"
+
+**GOAL PROGRESS REQUIREMENTS:**
+1. Must reference user's ACTUAL health goal from profile
+2. Status must be honest (not always "excellent")
+3. Message should motivate without lying about progress
 
 Generate the JSON now:"""
 
@@ -1643,31 +1698,54 @@ Generate the JSON now:"""
 
     def _parse_coaching_result(self, result_dict: Dict[str, Any]) -> CoachingResult:
         """
-        Parse JSON result into CoachingResult model.
+        Parse GPT-4o's JSON response into CoachingResult model.
+
+        Expected format from GPT-4o:
+        {
+            "message": "Honest assessment...",
+            "next_meal_combo": {
+                "combo": "Ugu soup (300g) + Fish (150g)...",
+                "why": "Closes iron gap...",
+                "nutrients": {"calories": 520, "protein": 35, "iron": 8.2},
+                "estimated_cost": "₦800-1000"
+            },
+            "goal_progress": {
+                "type": "lose_weight",
+                "status": "needs_attention",
+                "message": "You're at 1650/1800 cal today..."
+            }
+        }
 
         Args:
-            result_dict: Parsed JSON from tool
+            result_dict: Parsed JSON from GPT-4o
 
         Returns:
-            Structured CoachingResult
+            Structured CoachingResult with goal-aligned fields
         """
-        nutrient_insights = []
-        for insight_data in result_dict.get("nutrient_insights", []):
-            nutrient_insight = NutrientInsight(**insight_data)
-            nutrient_insights.append(nutrient_insight)
+        from kai.models.agent_models import NextMealCombo, GoalProgress
 
-        meal_suggestions = []
-        for suggestion_data in result_dict.get("meal_suggestions", []):
-            meal_suggestion = MealSuggestion(**suggestion_data)
-            meal_suggestions.append(meal_suggestion)
+        # Parse next_meal_combo
+        next_meal_combo_data = result_dict.get("next_meal_combo", {})
+        next_meal_combo = NextMealCombo(
+            combo=next_meal_combo_data.get("combo", ""),
+            why=next_meal_combo_data.get("why", ""),
+            nutrients=next_meal_combo_data.get("nutrients", {}),
+            estimated_cost=next_meal_combo_data.get("estimated_cost", "")
+        )
 
+        # Parse goal_progress
+        goal_progress_data = result_dict.get("goal_progress", {})
+        goal_progress = GoalProgress(
+            type=goal_progress_data.get("type", "general_wellness"),
+            status=goal_progress_data.get("status", "on_track"),
+            message=goal_progress_data.get("message", "")
+        )
+
+        # Create CoachingResult with new format (no old fields!)
         return CoachingResult(
-            personalized_message=result_dict.get("personalized_message", ""),
-            nutrient_insights=nutrient_insights,
-            meal_suggestions=meal_suggestions,
-            motivational_tip=result_dict.get("motivational_tip", ""),
-            next_steps=result_dict.get("next_steps", []),
-            tone=result_dict.get("tone", "encouraging")
+            message=result_dict.get("message", ""),
+            next_meal_combo=next_meal_combo,
+            goal_progress=goal_progress
         )
 
     def _classify_meal_quality(

@@ -123,7 +123,7 @@ async def handle_user_request(
                 image_url=image_url,
                 meal_type=None,
             ),
-            timeout=150.0,  # Extended timeout: MiDaS depth estimation can take 60-90s
+            timeout=150.0,  # Extended timeout: Depth Anything V2 estimation can take 60-90s on Railway CPU
         )
         logger.info(f"   → Detected: {len(vision_result.detected_foods)} foods")
 
@@ -242,6 +242,7 @@ async def handle_user_request(
             "activity_level": "moderate",  # Could be from user profile
             "use_web_research": True,
             "vision_foods": [df.name for df in vision_result.detected_foods],
+            "daily_totals": daily_totals,  # FIX: Pass daily totals for accurate calorie tracking
         }
 
         # NEW SIGNATURE: provide_coaching(user_id, knowledge_result, user_context, workflow_type)

@@ -120,6 +120,7 @@ class NigerianFoodVectorDB:
             Metadata dictionary (must be JSON-serializable)
         """
         nutrients = food.get("nutrients_per_100g", {})
+        common_servings = food.get("common_servings", {})
 
         return {
             "food_id": food["id"],
@@ -141,6 +142,10 @@ class NigerianFoodVectorDB:
             # Store dietary flags as comma-separated string
             "dietary_flags": ",".join(food.get("dietary_flags", [])),
             "meal_types": ",".join(food.get("meal_types", [])),
+            # CRITICAL: Store portion limits from v2 database for realistic estimation
+            "typical_portion_g": common_servings.get("typical_portion_g", 150),
+            "min_reasonable_g": common_servings.get("min_reasonable_g", 50),
+            "max_reasonable_g": common_servings.get("max_reasonable_g", 300),
         }
 
     def load_foods_from_jsonl(self, jsonl_path: str) -> int:
@@ -386,7 +391,7 @@ class NigerianFoodVectorDB:
 
 
 def initialize_chromadb(
-    enriched_foods_path: str = "knowledge-base/data/processed/nigerian_llm_enriched.jsonl",
+    enriched_foods_path: str = "knowledge-base/data/processed/nigerian_foods_v2_improved.jsonl",
     persist_directory: str = "chromadb_data",
     reset: bool = False
 ) -> NigerianFoodVectorDB:
@@ -449,7 +454,7 @@ if __name__ == "__main__":
 
         # Initialize ChromaDB
         vector_db = initialize_chromadb(
-            enriched_foods_path="knowledge-base/data/processed/nigerian_llm_enriched.jsonl",
+            enriched_foods_path="knowledge-base/data/processed/nigerian_foods_v2_improved.jsonl",
             reset=False  # Set to True to reload all data
         )
 

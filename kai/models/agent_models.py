@@ -63,7 +63,7 @@ class VisionResult(BaseModel):
     needs_clarification: bool = False
     clarification_questions: List[str] = Field(default_factory=list)
     image_quality_issue: bool = False
-    midas_used: bool  # True if MiDaS MCP was used, False if fallback was used
+    depth_estimation_used: bool  # True if depth estimation MCP was used, False if fallback was used
 
 
 # ============================================================================
@@ -138,15 +138,26 @@ class MealSuggestion(BaseModel):
     why_recommended: str
 
 
+class NextMealCombo(BaseModel):
+    """Nigerian meal combo suggestion from GPT-4o"""
+    combo: str  # e.g., "Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)"
+    why: str  # Why this combo helps (closes gap, fits goal)
+    nutrients: Dict[str, float]  # {"calories": 520, "protein": 35, "iron": 8.2}
+    estimated_cost: str  # e.g., "₦800-1000"
+
+
+class GoalProgress(BaseModel):
+    """User's progress toward their health goal"""
+    type: str  # User's health goal (e.g., "lose_weight", "gain_muscle", "pregnancy")
+    status: Literal["excellent", "on_track", "needs_attention"]
+    message: str  # Progress message (e.g., "You're at 1650/1800 cal today - stay disciplined!")
+
+
 class CoachingResult(BaseModel):
-    """Result from Coaching Agent - Simplified for food logging"""
-    personalized_message: str
-    motivational_tip: str
-    next_steps: List[str] = Field(default_factory=list)
-    # Optional fields (not used for food logging, but kept for stats/query endpoints)
-    nutrient_insights: List[NutrientInsight] = Field(default_factory=list)
-    meal_suggestions: List[MealSuggestion] = Field(default_factory=list)
-    tone: Literal["encouraging", "celebratory", "educational", "supportive"] = "encouraging"
+    """Result from Coaching Agent - Goal-Aligned with Nigerian Meal Combos"""
+    message: str  # Honest, concise assessment (2-3 sentences)
+    next_meal_combo: NextMealCombo  # Nigerian meal combo from GPT-4o
+    goal_progress: GoalProgress  # Progress toward user's health goal
 
 
 # ============================================================================
@@ -160,7 +171,7 @@ class FoodLoggingResponse(BaseModel):
     detected_foods: List[DetectedFood] = Field(default_factory=list)
     nutrition_data: Optional[KnowledgeResult] = None
     coaching: Optional[CoachingResult] = None
-    midas_used: bool = False  # True if MiDaS used for portion estimation, False if fallback
+    depth_estimation_used: bool = False  # True if depth estimation used for portion estimation, False if fallback
     # ALL 8 NUTRIENTS - KAI is proficient in tracking all nutrients
     total_calories: float = 0.0
     total_protein: float = 0.0

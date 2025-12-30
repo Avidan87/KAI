@@ -1,78 +1,97 @@
 """
-MiDaS Railway MCP Client
+Depth Estimation Railway MCP Client
 
-This module provides a client to call the hosted MiDaS MCP server on Railway
-for depth estimation and portion size calculation from food images.
+This module provides a client to call the hosted Depth Estimation MCP server on Railway.
+Server uses Depth Anything V2 Small (state-of-the-art, 24.8M params).
 
-Instead of running MiDaS locally, this client makes HTTP requests to the
-Railway-hosted MCP server endpoint using MIDAS_MCP_URL from .env
+Makes HTTP requests to Railway-hosted MCP server endpoint using DEPTH_ESTIMATION_URL from .env
+Legacy support: Also reads MIDAS_MCP_URL for backwards compatibility
 """
 
 import httpx
 import os
+import time
+import logging
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
-class MiDaSRailwayClient:
-    """Client for calling MiDaS MCP server hosted on Railway"""
+class DepthEstimationClient:
+    """Client for calling Depth Estimation MCP server (Depth Anything V2) hosted on Railway"""
 
     def __init__(self, railway_url: Optional[str] = None):
         """
-        Initialize MiDaS Railway client.
+        Initialize Depth Estimation Railway client.
 
         Args:
-            railway_url: URL of hosted MiDaS MCP server on Railway
-                        If None, reads from MIDAS_MCP_URL env variable
+            railway_url: URL of hosted Depth Estimation MCP server on Railway
+                        If None, reads from DEPTH_ESTIMATION_URL or MIDAS_MCP_URL (legacy) env variable
         """
-        self.railway_url = railway_url or os.getenv("MIDAS_MCP_URL")
+        self.railway_url = railway_url or os.getenv("DEPTH_ESTIMATION_URL") or os.getenv("MIDAS_MCP_URL")
 
         if not self.railway_url:
             raise ValueError(
-                "MiDaS Railway URL not provided. Set MIDAS_MCP_URL environment variable "
-                "or pass railway_url parameter."
+                "Depth Estimation Railway URL not provided. Set DEPTH_ESTIMATION_URL (or legacy MIDAS_MCP_URL) "
+                "environment variable or pass railway_url parameter."
             )
 
         # Remove trailing slash
         self.railway_url = self.railway_url.rstrip('/')
 
         # Initialize async HTTP client with extended timeout for depth estimation
-        # MiDaS depth estimation can take 60-90 seconds for complex images
-        self.client = httpx.AsyncClient(timeout=120.0)
+        # Depth Anything V2 can take 30-60 seconds on CPU (Railway serverless)
+        # Timeout set to 120s to handle cold starts + processing
+        self.client = httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        )
 
     async def estimate_depth(
         self,
-        image_url: str,
-        model_type: str = "DPT_Large"
+        image_url: str
     ) -> Dict[str, Any]:
         """
-        Estimate depth map from food image.
+        Estimate depth map from food image using Depth Anything V2.
 
         Args:
             image_url: URL of the food image
-            model_type: MiDaS model type (DPT_Large, DPT_Hybrid, MiDaS_small)
 
         Returns:
             Dict with depth map data and metadata
+
+        Note:
+            Server uses Depth Anything V2 Small (24.8M params).
+            model_type parameter removed - server now uses fixed model.
         """
         endpoint = f"{self.railway_url}/api/v1/depth/estimate"
 
+        # Performance tracking
+        start_time = time.perf_counter()
+
         payload = {
-            "image_url": image_url,
-            "model_type": model_type
+            "image_url": image_url
         }
 
         try:
             response = await self.client.post(endpoint, json=payload)
             response.raise_for_status()
+
+            elapsed = time.perf_counter() - start_time
+            logger.info(f"⏱️ Depth estimation completed in {elapsed:.2f}s")
+
             return response.json()
 
         except httpx.HTTPStatusError as e:
-            raise Exception(f"MiDaS API error: {e.response.status_code} - {e.response.text}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Depth API error after {elapsed:.2f}s: {e.response.status_code}")
+            raise Exception(f"Depth API error: {e.response.status_code} - {e.response.text}")
         except httpx.RequestError as e:
-            raise Exception(f"Failed to connect to MiDaS Railway server: {e}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Connection failed after {elapsed:.2f}s: {str(e)}")
+            raise Exception(f"Failed to connect to Depth Railway server: {e}")
 
     async def estimate_portion_size(
         self,
@@ -83,7 +102,7 @@ class MiDaSRailwayClient:
         food_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Estimate portion size using depth estimation.
+        Estimate portion size using Depth Anything V2 depth estimation.
 
         Args:
             image_url: URL of the food image (optional if image_base64 provided)
@@ -94,11 +113,22 @@ class MiDaSRailwayClient:
 
         Returns:
             Dict with portion estimate in grams/ml and confidence score
+            {
+                "portion_grams": 250.0,
+                "volume_ml": 200.0,
+                "confidence": 0.78,
+                "reference_object_detected": true,
+                "success": true,
+                "message": "..."
+            }
         """
         if not image_url and not image_base64:
             raise ValueError("Either image_url or image_base64 must be provided")
 
         endpoint = f"{self.railway_url}/api/v1/portion/estimate"
+
+        # Performance tracking
+        start_time = time.perf_counter()
 
         payload = {
             "reference_object": reference_object,
@@ -115,31 +145,55 @@ class MiDaSRailwayClient:
         try:
             response = await self.client.post(endpoint, json=payload)
             response.raise_for_status()
-            return response.json()
+
+            elapsed = time.perf_counter() - start_time
+            result = response.json()
+
+            # Log performance with food type for analysis
+            logger.info(
+                f"⏱️ Portion estimation completed in {elapsed:.2f}s "
+                f"(food={food_type}, grams={result.get('portion_grams', 0):.1f}g)"
+            )
+
+            return result
 
         except httpx.HTTPStatusError as e:
-            raise Exception(f"MiDaS API error: {e.response.status_code} - {e.response.text}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Portion API error after {elapsed:.2f}s: {e.response.status_code}")
+            raise Exception(f"Portion API error: {e.response.status_code} - {e.response.text}")
         except httpx.RequestError as e:
-            raise Exception(f"Failed to connect to MiDaS Railway server: {e}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Connection failed after {elapsed:.2f}s: {str(e)}")
+            raise Exception(f"Failed to connect to Depth Railway server: {e}")
 
     async def health_check(self) -> Dict[str, Any]:
         """
-        Check if MiDaS Railway server is healthy.
+        Check if Depth Estimation Railway server is healthy.
 
         Returns:
             Dict with health status
         """
         endpoint = f"{self.railway_url}/health"
 
+        start_time = time.perf_counter()
+
         try:
             response = await self.client.get(endpoint)
             response.raise_for_status()
+
+            elapsed = time.perf_counter() - start_time
+            logger.info(f"⏱️ Health check completed in {elapsed:.2f}s")
+
             return response.json()
 
         except httpx.HTTPStatusError as e:
-            raise Exception(f"MiDaS health check failed: {e.response.status_code}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Health check failed after {elapsed:.2f}s: {e.response.status_code}")
+            raise Exception(f"Health check failed: {e.response.status_code}")
         except httpx.RequestError as e:
-            raise Exception(f"Cannot reach MiDaS Railway server: {e}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Cannot reach server after {elapsed:.2f}s: {str(e)}")
+            raise Exception(f"Cannot reach Depth Railway server: {e}")
 
     async def close(self):
         """Close the HTTP client"""
@@ -161,9 +215,10 @@ async def get_portion_estimate(
     food_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Convenience function to get portion estimate from MiDaS Railway.
+    Convenience function to get portion estimate from Depth Estimation Railway.
 
     This function can be used directly in OpenAI Agents SDK tools.
+    Uses Depth Anything V2 Small for state-of-the-art depth estimation.
 
     Args:
         image_url: URL of food image (optional if image_base64 provided)
@@ -174,12 +229,17 @@ async def get_portion_estimate(
     Returns:
         {
             "portion_grams": 250.0,
+            "volume_ml": 200.0,
             "confidence": 0.78,
-            "reference_used": "plate",
-            "volume_ml": 200.0
+            "reference_object_detected": true,
+            "success": true
         }
     """
+    # Performance tracking
+    overall_start = time.perf_counter()
+
     if not image_url and not image_base64:
+        logger.warning("⚠️ No image provided for portion estimation")
         return {
             "portion_grams": 200.0,  # Default 200g
             "confidence": 0.5,
@@ -199,7 +259,7 @@ async def get_portion_estimate(
 
     reference_size = REFERENCE_SIZES.get(reference_object.lower()) if reference_object else None
 
-    async with MiDaSRailwayClient() as client:
+    async with DepthEstimationClient() as client:
         # Skip health check - if server is down, the API call will fail anyway
         # Health check adds unnecessary latency and potential DNS timeout issues
 
@@ -212,16 +272,25 @@ async def get_portion_estimate(
                 reference_size_cm=reference_size,
                 food_type=food_type
             )
+
+            overall_elapsed = time.perf_counter() - overall_start
+            logger.info(f"✅ Total get_portion_estimate() time: {overall_elapsed:.2f}s")
+
             return result
 
         except Exception as e:
+            overall_elapsed = time.perf_counter() - overall_start
+            logger.error(
+                f"❌ Portion estimation failed after {overall_elapsed:.2f}s: {str(e)[:100]}"
+            )
+
             # Fallback: return default portion estimate
             return {
                 "portion_grams": 200.0,  # Default 200g
                 "confidence": 0.5,
                 "error": str(e),
                 "fallback_used": True,
-                "note": "Using default portion estimate due to MiDaS error"
+                "note": "Using default portion estimate due to depth estimation error"
             }
 
 
@@ -229,15 +298,15 @@ async def get_portion_estimate(
 if __name__ == "__main__":
     import asyncio
 
-    async def test_midas_client():
-        """Test the MiDaS Railway client"""
+    async def test_depth_estimation_client():
+        """Test the Depth Estimation Railway client"""
 
-        print("🧪 Testing MiDaS Railway Client\n")
+        print("🧪 Testing Depth Estimation Railway Client\n")
 
         # Example image URL (replace with actual)
         test_image_url = "https://example.com/jollof-rice.jpg"
 
-        async with MiDaSRailwayClient() as client:
+        async with DepthEstimationClient() as client:
             # Test 1: Health check
             print("1️⃣  Testing health check...")
             try:
@@ -275,4 +344,4 @@ if __name__ == "__main__":
             print(f"   ✗ Failed: {e}")
 
     # Run tests
-    asyncio.run(test_midas_client())
+    asyncio.run(test_depth_estimation_client())

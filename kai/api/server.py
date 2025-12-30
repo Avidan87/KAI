@@ -209,7 +209,7 @@ async def food_logging_upload(
             detected_foods=result.get("vision").detected_foods if result.get("vision") else [],
             nutrition_data=knowledge,
             coaching=result.get("coaching"),
-            midas_used=result.get('vision').midas_used if result.get('vision') else False,
+            depth_estimation_used=result.get('vision').depth_estimation_used if result.get('vision') else False,
             # Return ALL 8 nutrients
             total_calories=total_calories,
             total_protein=total_protein,
@@ -251,8 +251,22 @@ async def chat(
 
         coaching = result.get("coaching")
         knowledge = result.get("nutrition")
-        message = getattr(coaching, "personalized_message", "") if coaching else ""
-        suggestions = getattr(coaching, "next_steps", []) if coaching else []
+
+        # Extract coaching message and suggestions from new format
+        if coaching:
+            message = getattr(coaching, "message", "")
+            # Build suggestions from next_meal_combo and goal_progress
+            suggestions = []
+            next_meal_combo = getattr(coaching, "next_meal_combo", None)
+            if next_meal_combo:
+                combo_text = f"{next_meal_combo.combo} - {next_meal_combo.why} ({next_meal_combo.estimated_cost})"
+                suggestions.append(combo_text)
+            goal_progress = getattr(coaching, "goal_progress", None)
+            if goal_progress and goal_progress.message:
+                suggestions.append(goal_progress.message)
+        else:
+            message = ""
+            suggestions = []
 
         # Get sources from knowledge result if available
         sources = []

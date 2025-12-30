@@ -299,8 +299,8 @@ def process_knowledge_base(input_file: str, output_file: str, limit: Optional[in
 if __name__ == "__main__":
     # File paths
     input_file = "knowledge-base/data/processed/nigerian_llm_complete.jsonl"
-    output_file = "knowledge-base/data/processed/nigerian_llm_enriched.jsonl"
+    output_file = "knowledge-base/data/processed/nigerian_foods_v2_improved.jsonl"
 
     # Process all foods (or set limit for testing)
     # process_knowledge_base(input_file, output_file, limit=5)  # Test with 5 foods
-    process_knowledge_base(input_file, output_file)  # Process all 50 foods
+    process_knowledge_base(input_file, output_file)  # Process all foods
