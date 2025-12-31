@@ -142,8 +142,6 @@ class NextMealCombo(BaseModel):
     """Nigerian meal combo suggestion from GPT-4o"""
     combo: str  # e.g., "Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)"
     why: str  # Why this combo helps (closes gap, fits goal)
-    nutrients: Dict[str, float]  # {"calories": 520, "protein": 35, "iron": 8.2}
-    estimated_cost: str  # e.g., "₦800-1000"
 
 
 class GoalProgress(BaseModel):

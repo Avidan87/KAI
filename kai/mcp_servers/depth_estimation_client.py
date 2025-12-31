@@ -6,31 +6,79 @@ Server uses Depth Anything V2 Small (state-of-the-art, 24.8M params).
 
 Makes HTTP requests to Railway-hosted MCP server endpoint using DEPTH_ESTIMATION_URL from .env
 Legacy support: Also reads MIDAS_MCP_URL for backwards compatibility
+
+Features:
+- Batch processing: Process multiple foods in one API call
+- Image hash caching: Cache depth maps by image hash to avoid reprocessing
+- Full image + bbox support: Send full image with bboxes for better reference detection
 """
 
 import httpx
 import os
 import time
 import logging
-from typing import Dict, Any, Optional
+import hashlib
+from typing import Dict, Any, Optional, List, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# Global cache for depth estimations (image_hash -> result)
+# This is an in-memory cache that persists across requests
+_DEPTH_CACHE: Dict[str, Dict[str, Any]] = {}
+CACHE_MAX_SIZE = 100  # Maximum number of cached results
+
+
+def _compute_image_hash(image_data: str) -> str:
+    """
+    Compute SHA-256 hash of image data for caching.
+
+    Args:
+        image_data: Base64 encoded image or URL
+
+    Returns:
+        Hash string for cache key
+    """
+    return hashlib.sha256(image_data.encode()).hexdigest()[:16]  # First 16 chars
+
+
+def _get_cached_result(cache_key: str) -> Optional[Dict[str, Any]]:
+    """Get cached depth estimation result if available."""
+    if cache_key in _DEPTH_CACHE:
+        logger.info(f"💾 Cache HIT for {cache_key}")
+        return _DEPTH_CACHE[cache_key].copy()
+    return None
+
+
+def _cache_result(cache_key: str, result: Dict[str, Any]) -> None:
+    """Cache a depth estimation result."""
+    global _DEPTH_CACHE
+
+    # Simple LRU: if cache is full, remove oldest entry
+    if len(_DEPTH_CACHE) >= CACHE_MAX_SIZE:
+        oldest_key = next(iter(_DEPTH_CACHE))
+        del _DEPTH_CACHE[oldest_key]
+        logger.debug(f"🗑️ Cache full, removed {oldest_key}")
+
+    _DEPTH_CACHE[cache_key] = result.copy()
+    logger.info(f"💾 Cached result for {cache_key} (cache size: {len(_DEPTH_CACHE)})")
+
 
 class DepthEstimationClient:
     """Client for calling Depth Estimation MCP server (Depth Anything V2) hosted on Railway"""
 
-    def __init__(self, railway_url: Optional[str] = None):
+    def __init__(self, railway_url: Optional[str] = None, enable_cache: bool = True):
         """
         Initialize Depth Estimation Railway client.
 
         Args:
             railway_url: URL of hosted Depth Estimation MCP server on Railway
                         If None, reads from DEPTH_ESTIMATION_URL or MIDAS_MCP_URL (legacy) env variable
+            enable_cache: Enable image hash caching to avoid reprocessing same images
         """
         self.railway_url = railway_url or os.getenv("DEPTH_ESTIMATION_URL") or os.getenv("MIDAS_MCP_URL")
+        self.enable_cache = enable_cache
 
         if not self.railway_url:
             raise ValueError(
@@ -125,6 +173,15 @@ class DepthEstimationClient:
         if not image_url and not image_base64:
             raise ValueError("Either image_url or image_base64 must be provided")
 
+        # Check cache first
+        cache_key = None
+        if self.enable_cache:
+            image_data = image_base64 if image_base64 else image_url
+            cache_key = _compute_image_hash(image_data + (food_type or ""))
+            cached = _get_cached_result(cache_key)
+            if cached:
+                return cached
+
         endpoint = f"{self.railway_url}/api/v1/portion/estimate"
 
         # Performance tracking
@@ -155,6 +212,10 @@ class DepthEstimationClient:
                 f"(food={food_type}, grams={result.get('portion_grams', 0):.1f}g)"
             )
 
+            # Cache the result
+            if self.enable_cache and cache_key:
+                _cache_result(cache_key, result)
+
             return result
 
         except httpx.HTTPStatusError as e:
@@ -165,6 +226,139 @@ class DepthEstimationClient:
             elapsed = time.perf_counter() - start_time
             logger.error(f"❌ Connection failed after {elapsed:.2f}s: {str(e)}")
             raise Exception(f"Failed to connect to Depth Railway server: {e}")
+
+    async def estimate_portions_batch(
+        self,
+        image_url: Optional[str] = None,
+        image_base64: Optional[str] = None,
+        bboxes: List[Tuple[int, int, int, int]] = None,
+        food_types: List[str] = None,
+        reference_object: Optional[str] = None,
+        reference_size_cm: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Estimate portions for multiple foods in a single API call (BATCH PROCESSING).
+
+        This is much more efficient than calling estimate_portion_size() multiple times
+        because it:
+        1. Runs depth estimation once on the full image
+        2. Detects reference object once (shared across all foods)
+        3. Calculates portions for all foods in one pass
+
+        Args:
+            image_url: URL of the food image (optional if image_base64 provided)
+            image_base64: Base64 encoded image (optional if image_url provided)
+            bboxes: List of bounding boxes [(x1, y1, x2, y2), ...] for each food
+            food_types: List of food names corresponding to each bbox
+            reference_object: Type of reference object (e.g., "plate", "spoon")
+            reference_size_cm: Known size of reference object in cm
+
+        Returns:
+            List of portion estimates, one per bbox:
+            [
+                {
+                    "portion_grams": 250.0,
+                    "volume_ml": 200.0,
+                    "confidence": 0.78,
+                    "food_type": "Jollof Rice",
+                    "bbox": [100, 150, 300, 350]
+                },
+                ...
+            ]
+        """
+        if not image_url and not image_base64:
+            raise ValueError("Either image_url or image_base64 must be provided")
+
+        if not bboxes or not food_types:
+            raise ValueError("bboxes and food_types must be provided for batch processing")
+
+        if len(bboxes) != len(food_types):
+            raise ValueError(f"Mismatch: {len(bboxes)} bboxes but {len(food_types)} food_types")
+
+        # Check cache first
+        cache_key = None
+        if self.enable_cache:
+            image_data = image_base64 if image_base64 else image_url
+            cache_key = _compute_image_hash(image_data + str(bboxes))
+            cached = _get_cached_result(cache_key)
+            if cached:
+                logger.info(f"⚡ Batch cache HIT - returning cached results for {len(bboxes)} foods")
+                return cached.get("results", [])
+
+        endpoint = f"{self.railway_url}/api/v1/portion/batch"
+
+        # Performance tracking
+        start_time = time.perf_counter()
+
+        payload = {
+            "bboxes": [[int(x1), int(y1), int(x2), int(y2)] for x1, y1, x2, y2 in bboxes],
+            "food_types": food_types,
+            "reference_object": reference_object,
+            "reference_size_cm": reference_size_cm
+        }
+
+        # Add either URL or base64 to payload
+        if image_url:
+            payload["image_url"] = image_url
+        if image_base64:
+            payload["image_base64"] = image_base64
+
+        try:
+            response = await self.client.post(endpoint, json=payload)
+            response.raise_for_status()
+
+            elapsed = time.perf_counter() - start_time
+            result = response.json()
+            results = result.get("results", [])
+
+            # Log performance
+            total_grams = sum(r.get("portion_grams", 0) for r in results)
+            logger.info(
+                f"⏱️ Batch portion estimation completed in {elapsed:.2f}s "
+                f"({len(results)} foods, {total_grams:.0f}g total)"
+            )
+
+            # Cache the results
+            if self.enable_cache and cache_key:
+                _cache_result(cache_key, {"results": results})
+
+            return results
+
+        except httpx.HTTPStatusError as e:
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Batch portion API error after {elapsed:.2f}s: {e.response.status_code}")
+
+            # Fallback: return default portions for all foods
+            logger.warning(f"⚠️ Batch API not available, falling back to default portions")
+            return [
+                {
+                    "portion_grams": 200.0,
+                    "volume_ml": 150.0,
+                    "confidence": 0.5,
+                    "food_type": food_type,
+                    "bbox": list(bbox),
+                    "fallback_used": True,
+                    "error": f"Batch API error: {e.response.status_code}"
+                }
+                for food_type, bbox in zip(food_types, bboxes)
+            ]
+        except httpx.RequestError as e:
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"❌ Connection failed after {elapsed:.2f}s: {str(e)}")
+
+            # Fallback: return default portions
+            return [
+                {
+                    "portion_grams": 200.0,
+                    "volume_ml": 150.0,
+                    "confidence": 0.5,
+                    "food_type": food_type,
+                    "bbox": list(bbox),
+                    "fallback_used": True,
+                    "error": f"Connection error: {str(e)}"
+                }
+                for food_type, bbox in zip(food_types, bboxes)
+            ]
 
     async def health_check(self) -> Dict[str, Any]:
         """
@@ -292,6 +486,115 @@ async def get_portion_estimate(
                 "fallback_used": True,
                 "note": "Using default portion estimate due to depth estimation error"
             }
+
+
+async def get_portions_batch(
+    image_url: Optional[str] = None,
+    image_base64: Optional[str] = None,
+    bboxes: List[Tuple[int, int, int, int]] = None,
+    food_types: List[str] = None,
+    reference_object: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Convenience function to get portion estimates for multiple foods in one call (BATCH).
+
+    This is MUCH faster than calling get_portion_estimate() multiple times:
+    - Single depth estimation run (instead of N runs)
+    - Single reference detection (shared calibration)
+    - Processes all foods in one API call
+
+    Expected speedup: 4 foods in ~22s instead of ~88s (75% faster!)
+
+    Args:
+        image_url: URL of food image (optional if image_base64 provided)
+        image_base64: Base64 encoded image (optional if image_url provided)
+        bboxes: List of bounding boxes [(x1, y1, x2, y2), ...] for each food
+        food_types: List of food names corresponding to each bbox
+        reference_object: Detected reference object (plate, spoon, hand, etc.)
+
+    Returns:
+        List of portion estimates (one per food):
+        [
+            {
+                "portion_grams": 250.0,
+                "volume_ml": 200.0,
+                "confidence": 0.78,
+                "food_type": "Jollof Rice",
+                "bbox": [100, 150, 300, 350]
+            },
+            ...
+        ]
+    """
+    overall_start = time.perf_counter()
+
+    if not image_url and not image_base64:
+        logger.warning("⚠️ No image provided for batch portion estimation")
+        return [
+            {
+                "portion_grams": 200.0,
+                "confidence": 0.5,
+                "food_type": food_type,
+                "error": "No image provided",
+                "fallback_used": True
+            }
+            for food_type in (food_types or [])
+        ]
+
+    if not bboxes or not food_types:
+        logger.warning("⚠️ No bboxes or food_types provided for batch estimation")
+        return []
+
+    # Common Nigerian reference sizes
+    REFERENCE_SIZES = {
+        "plate": 24.0,
+        "plate_large": 28.0,
+        "spoon": 15.0,
+        "hand": 18.0,
+        "fork": 18.0,
+        "cup": 8.0
+    }
+
+    reference_size = REFERENCE_SIZES.get(reference_object.lower()) if reference_object else None
+
+    async with DepthEstimationClient() as client:
+        try:
+            results = await client.estimate_portions_batch(
+                image_url=image_url,
+                image_base64=image_base64,
+                bboxes=bboxes,
+                food_types=food_types,
+                reference_object=reference_object,
+                reference_size_cm=reference_size
+            )
+
+            overall_elapsed = time.perf_counter() - overall_start
+            total_grams = sum(r.get("portion_grams", 0) for r in results)
+            logger.info(
+                f"✅ Total get_portions_batch() time: {overall_elapsed:.2f}s "
+                f"({len(results)} foods, {total_grams:.0f}g total)"
+            )
+
+            return results
+
+        except Exception as e:
+            overall_elapsed = time.perf_counter() - overall_start
+            logger.error(
+                f"❌ Batch portion estimation failed after {overall_elapsed:.2f}s: {str(e)[:100]}"
+            )
+
+            # Fallback: return default portions for all foods
+            return [
+                {
+                    "portion_grams": 200.0,
+                    "confidence": 0.5,
+                    "food_type": food_type,
+                    "bbox": list(bbox),
+                    "error": str(e),
+                    "fallback_used": True,
+                    "note": "Using default portion estimate due to batch API error"
+                }
+                for food_type, bbox in zip(food_types, bboxes)
+            ]
 
 
 # Example usage in agents

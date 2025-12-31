@@ -61,7 +61,7 @@ class FlorenceBBoxDetector:
             dtype = torch.float16 if self.device == "cuda" else torch.float32
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype=dtype,  # Use torch_dtype (transformers expects this)
+                dtype=dtype,  # Use dtype (torch_dtype is deprecated)
                 trust_remote_code=True,
                 attn_implementation="eager"  # Fix for Python 3.13: disable SDPA
             )

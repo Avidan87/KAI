@@ -538,8 +538,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 user_context["tavily_used"] = tavily_used
 
             logger.info(
-                f"✅ Generated coaching: {len(coaching_result.nutrient_insights)} insights, "
-                f"{len(coaching_result.meal_suggestions)} suggestions (Tavily: {tavily_used})"
+                f"✅ Generated coaching: message='{coaching_result.message[:50]}...', "
+                f"next_meal_combo='{coaching_result.next_meal_combo.combo[:60]}...' (Tavily: {tavily_used})"
             )
 
             return coaching_result
@@ -929,15 +929,7 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
                   Example: 'Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)' OR 'Efo riro (250g) + Fish (150g) - skip swallow' (for weight loss)",
 
         "why": "One sentence explaining how this combo closes {primary_gap} gap and fits {user_health_goals or 'goal'}.
-                Example: 'Only 320 cal, gives you 7mg iron + 30g protein without breaking calorie budget'",
-
-        "nutrients": {{
-            "calories": 0,  // Total calories for the combo
-            "protein": 0,   // Total protein in grams
-            "{primary_gap}": 0  // Amount of primary gap nutrient (iron/calcium/vitamin_a/zinc)
-        }},
-
-        "estimated_cost": "₦XXX-YYY"  // Realistic Nigerian market price
+                Example: 'Only 320 cal, gives you 7mg iron + 30g protein without breaking calorie budget'"
     }},
 
     "goal_progress": {{
@@ -1705,9 +1697,7 @@ Generate the JSON now:"""
             "message": "Honest assessment...",
             "next_meal_combo": {
                 "combo": "Ugu soup (300g) + Fish (150g)...",
-                "why": "Closes iron gap...",
-                "nutrients": {"calories": 520, "protein": 35, "iron": 8.2},
-                "estimated_cost": "₦800-1000"
+                "why": "Closes iron gap..."
             },
             "goal_progress": {
                 "type": "lose_weight",
@@ -1728,9 +1718,7 @@ Generate the JSON now:"""
         next_meal_combo_data = result_dict.get("next_meal_combo", {})
         next_meal_combo = NextMealCombo(
             combo=next_meal_combo_data.get("combo", ""),
-            why=next_meal_combo_data.get("why", ""),
-            nutrients=next_meal_combo_data.get("nutrients", {}),
-            estimated_cost=next_meal_combo_data.get("estimated_cost", "")
+            why=next_meal_combo_data.get("why", "")
         )
 
         # Parse goal_progress

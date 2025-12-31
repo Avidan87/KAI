@@ -259,7 +259,7 @@ async def chat(
             suggestions = []
             next_meal_combo = getattr(coaching, "next_meal_combo", None)
             if next_meal_combo:
-                combo_text = f"{next_meal_combo.combo} - {next_meal_combo.why} ({next_meal_combo.estimated_cost})"
+                combo_text = f"{next_meal_combo.combo} - {next_meal_combo.why}"
                 suggestions.append(combo_text)
             goal_progress = getattr(coaching, "goal_progress", None)
             if goal_progress and goal_progress.message:
