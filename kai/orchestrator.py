@@ -255,7 +255,7 @@ async def handle_user_request(
             ),
             timeout=45.0,
         )
-        logger.info(f"   → Coaching: {len(coaching_result.nutrient_insights)} insights generated")
+        logger.info(f"   → Coaching: {coaching_result.message[:50]}...")
 
         response = {
             "workflow": "food_logging",
