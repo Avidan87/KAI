@@ -238,11 +238,11 @@ async def handle_user_request(
         # Build user context with health profile if available
         # NOTE: New coaching agent uses user_id to fetch stats, RDV, and history
         user_context = {
-            "budget": "mid",  # Could be from user profile
             "activity_level": "moderate",  # Could be from user profile
             "use_web_research": True,
             "vision_foods": [df.name for df in vision_result.detected_foods],
             "daily_totals": daily_totals,  # FIX: Pass daily totals for accurate calorie tracking
+            "user_name": health_profile.get("name") if health_profile else None,  # User's name for personalization
         }
 
         # NEW SIGNATURE: provide_coaching(user_id, knowledge_result, user_context, workflow_type)
@@ -310,7 +310,6 @@ async def handle_user_request(
         # Create user context dict that will be modified by coaching agent
         user_ctx = {
             "use_web_research": True,
-            "budget": "mid",
             "activity_level": "moderate",
             "user_question": user_message  # Pass user's question for Tavily query
         }
@@ -356,7 +355,6 @@ async def handle_user_request(
         # Create user context dict that will be modified by coaching agent
         user_ctx = {
             "use_web_research": True,
-            "budget": "mid",
             "activity_level": "moderate",
             "user_question": user_message  # Pass user's question for Tavily query
         }

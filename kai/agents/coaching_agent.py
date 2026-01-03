@@ -8,7 +8,6 @@ Focus areas:
 - Multi-nutrient tracking (all 8 nutrients)
 - Learning phase (observational first 7 days/21 meals)
 - Progressive coaching with week-over-week trends
-- Budget-friendly meal planning
 - Cultural context and preferences
 """
 
@@ -39,6 +38,7 @@ from kai.utils import (
     get_nutrient_gap_priority,
     get_primary_nutritional_gap,
 )
+from kai.rag.chromadb_setup import NigerianFoodVectorDB
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -60,17 +60,28 @@ class CoachingAgent:
     - Personalized nutrition insights for ALL 8 nutrients
     - Meal suggestions using Nigerian foods via Knowledge Agent
     - Motivational messaging with cultural context
-    - Budget-aware recommendations
     """
 
-    def __init__(self, openai_api_key: Optional[str] = None):
-        """Initialize Coaching Agent with GPT-4o."""
+    def __init__(self, openai_api_key: Optional[str] = None, chromadb_path: str = "chromadb_data"):
+        """Initialize Coaching Agent with GPT-4o and ChromaDB for dynamic meal combos."""
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found")
 
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = "gpt-4o"  # GPT-4o for dynamic coaching generation
+
+        # Initialize ChromaDB for dynamic meal combo generation
+        try:
+            self.vector_db = NigerianFoodVectorDB(
+                persist_directory=chromadb_path,
+                collection_name="nigerian_foods",
+                openai_api_key=api_key
+            )
+            logger.info("✓ ChromaDB initialized for dynamic meal combos")
+        except Exception as e:
+            logger.warning(f"⚠️  ChromaDB initialization failed: {e}. Will use fallback for meal combos.")
+            self.vector_db = None
 
         # NOTE: RDV values are now calculated per-user using kai.utils.calculate_user_rdv()
         # No more hardcoded RDVs!
@@ -115,8 +126,8 @@ class CoachingAgent:
                 "function": {
                     "name": "suggest_meals",
                     "description": (
-                        "Suggest Nigerian meals based on nutritional needs and budget. "
-                        "Provides culturally-relevant, affordable meal ideas."
+                        "Suggest Nigerian meals based on nutritional needs. "
+                        "Provides culturally-relevant meal ideas."
                     ),
                     "parameters": {
                         "type": "object",
@@ -125,11 +136,6 @@ class CoachingAgent:
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Nutrients to focus on (e.g., ['iron', 'protein'])"
-                            },
-                            "budget": {
-                                "type": "string",
-                                "enum": ["low", "mid", "high"],
-                                "description": "Budget tier"
                             },
                             "meal_type": {
                                 "type": "string",
@@ -153,12 +159,11 @@ Your mission is to provide culturally-aware, empathetic nutrition guidance that 
 - Multi-nutrient analysis (calories, protein, carbs, fat, iron, calcium, vitamin A, zinc)
 - Learning phase coaching (observational for first 7 days/21 meals)
 - Progressive coaching based on week-over-week trends
-- Budget-friendly meal planning
 - Motivational coaching with cultural sensitivity
 
 **Your Approach:**
 1. Celebrate what users are doing well (reference specific foods they've eaten)
-2. Provide actionable, budget-aware suggestions
+2. Provide actionable suggestions
 3. Use cultural context and familiar Nigerian foods
 4. Explain WHY nutrients matter for their health
 5. Be encouraging and non-judgmental
@@ -194,12 +199,11 @@ Your mission is to provide culturally-aware, empathetic nutrition guidance that 
 - Practical and actionable
 - Gender-neutral and inclusive
 - Culturally aware and respectful
-- Health-focused but realistic about budgets
+- Health-focused and realistic
 
 **Cultural Sensitivity:**
 - Respect food traditions and preferences
-- Acknowledge financial realities
-- Suggest locally available, affordable Nigerian foods
+- Suggest locally available Nigerian foods
 - Use Nigerian food names and contexts
 - Celebrate cultural food heritage
 
@@ -595,6 +599,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         """
         logger.info(f"🤖 Generating dynamic GPT-4o coaching (learning_phase={is_learning_phase})")
 
+        # Extract user name from context for personalization
+        user_name = user_context.get("user_name") if user_context else None
+        logger.info(f"   User name: {user_name or 'Not provided'}")
+
         # Build context for GPT-4o
         foods_eaten = [food.name for food in knowledge_result.foods]
         if not foods_eaten and user_context is not None and 'vision_foods' in user_context:
@@ -642,7 +650,6 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             total_meals=total_meals,
             current_streak=current_streak,
             food_frequency=food_frequency,
-            budget=user_context.get("budget", "mid"),
             meal_quality=meal_quality,
             high_nutrients=high_nutrients,
             low_nutrients=low_nutrients,
@@ -653,7 +660,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             meal_type=meal_type,
             meal_size=meal_size,
             size_emoji=size_emoji,
-            user_health_goals=user_health_goals  # NEW: Pass health goals to prompt
+            user_health_goals=user_health_goals,  # NEW: Pass health goals to prompt
+            user_name=user_name  # NEW: Pass user name for personalization
         )
 
         # Call GPT-4o for dynamic coaching
@@ -689,6 +697,112 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 user_rdv=user_rdv
             )
 
+    def _get_relevant_foods_for_gap(
+        self,
+        primary_gap: str,
+        user_health_goals: Optional[str] = None,
+        top_k: int = 15
+    ) -> List[Dict[str, Any]]:
+        """
+        Query ChromaDB for Nigerian foods relevant to user's primary nutrient gap.
+
+        Args:
+            primary_gap: Primary nutrient user is lacking (e.g., "iron", "protein")
+            user_health_goals: User's health goal for additional filtering
+            top_k: Number of foods to retrieve
+
+        Returns:
+            List of food dictionaries with nutritional data
+        """
+        if not self.vector_db:
+            logger.warning("ChromaDB not available, using fallback food list")
+            return []
+
+        try:
+            # Build semantic search query based on nutrient gap
+            nutrient_queries = {
+                "iron": "Nigerian foods high in iron: dark leafy greens, beans, liver, red meat, fish",
+                "protein": "Nigerian protein-rich foods: fish, chicken, beans, eggs, moin moin",
+                "calcium": "Nigerian calcium-rich foods: milk, sardines, okra, leafy greens",
+                "vitamin_a": "Nigerian vitamin A foods: yellow vegetables, plantain, palm oil, carrots",
+                "zinc": "Nigerian zinc-rich foods: meat, fish, beans, nuts, whole grains",
+                "carbohydrates": "Nigerian energy foods: rice, yam, plantain, garri, fufu",
+                "fat": "Nigerian healthy fats: palm oil, groundnuts, avocado, fish",
+                "calories": "Nigerian high-calorie foods for weight gain" if user_health_goals and "gain" in user_health_goals.lower()
+                            else "Nigerian balanced meals"
+            }
+
+            query = nutrient_queries.get(primary_gap.lower(), f"Nigerian foods rich in {primary_gap}")
+
+            # Search ChromaDB
+            results = self.vector_db.search(query, top_k=top_k)
+
+            logger.info(f"   → Retrieved {len(results)} foods from ChromaDB for {primary_gap} gap")
+            return results
+
+        except Exception as e:
+            logger.warning(f"ChromaDB search failed: {e}. Using fallback.")
+            return []
+
+    def _format_food_list_for_prompt(
+        self,
+        foods: List[Dict[str, Any]],
+        primary_gap: str
+    ) -> str:
+        """
+        Format dynamic food list for GPT-4o prompt.
+
+        Args:
+            foods: List of food dictionaries from ChromaDB
+            primary_gap: Primary nutrient gap to highlight
+
+        Returns:
+            Formatted string for prompt injection
+        """
+        if not foods:
+            # Fallback to minimal list if ChromaDB fails
+            return """- Egusi Soup: Great protein and iron
+- Efo Riro: Excellent iron and vitamin A
+- Jollof Rice: Moderate calories, carb-heavy
+- Grilled Fish: Excellent protein and calcium
+- Eba: High carbs, filling swallow"""
+
+        formatted_list = []
+        for food in foods:
+            name = food.get("name", "Unknown")
+            nutrients = food.get("nutrients_per_100g", {})
+
+            # Build qualitative description based on nutrient content
+            highlights = []
+
+            # Highlight primary gap nutrient
+            if primary_gap == "iron" and nutrients.get("iron", 0) > 3:
+                highlights.append("rich in iron")
+            elif primary_gap == "protein" and nutrients.get("protein", 0) > 10:
+                highlights.append("excellent protein")
+            elif primary_gap == "calcium" and nutrients.get("calcium", 0) > 100:
+                highlights.append("high calcium")
+            elif primary_gap == "vitamin_a" and nutrients.get("vitamin_a", 0) > 500:
+                highlights.append("rich in vitamin A")
+
+            # Add other notable nutrients
+            if nutrients.get("protein", 0) > 15 and "protein" not in primary_gap:
+                highlights.append("good protein")
+            if nutrients.get("iron", 0) > 5 and "iron" not in primary_gap:
+                highlights.append("high iron")
+
+            # Describe calorie level
+            calories = nutrients.get("calories", 0)
+            if calories > 300:
+                highlights.append("high energy")
+            elif calories < 100:
+                highlights.append("low calorie")
+
+            description = ", ".join(highlights) if highlights else "balanced nutrition"
+            formatted_list.append(f"- {name}: {description.capitalize()}")
+
+        return "\n".join(formatted_list[:12])  # Limit to 12 foods for prompt size
+
     def _build_dynamic_coaching_prompt(
         self,
         food_list: str,
@@ -702,7 +816,6 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         total_meals: int,
         current_streak: int,
         food_frequency: List[Dict],
-        budget: str,
         meal_quality: str,
         high_nutrients: Dict[str, float],
         low_nutrients: Dict[str, float],
@@ -713,7 +826,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         meal_type: str = "lunch",
         meal_size: str = "MODERATE MEAL",
         size_emoji: str = "🍽️",
-        user_health_goals: Optional[str] = None
+        user_health_goals: Optional[str] = None,
+        user_name: Optional[str] = None
     ) -> str:
         """Build dynamic system prompt for GPT-4o coaching generation.
 
@@ -728,6 +842,19 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         top_foods = [f["food_name"] for f in food_frequency[:5]] if food_frequency else []
         top_foods_str = ", ".join(top_foods) if top_foods else "No history yet"
 
+        # Query ChromaDB for relevant foods based on primary nutrient gap
+        relevant_foods = self._get_relevant_foods_for_gap(
+            primary_gap=primary_gap,
+            user_health_goals=user_health_goals,
+            top_k=15
+        )
+
+        # Format dynamic food list for prompt
+        dynamic_food_list = self._format_food_list_for_prompt(
+            foods=relevant_foods,
+            primary_gap=primary_gap
+        )
+
         # Build health goal guidance based on user's goals
         health_goal_guidance = ""
         if user_health_goals:
@@ -739,7 +866,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 - Prioritize high-protein, low-calorie meals for satiety
 - FLAG high-calorie meals honestly - don't celebrate them
 - Suggest lighter Nigerian alternatives (grilled vs fried, skip swallow, etc.)
-- Track calories remaining for day - warn if running over budget"""
+- Track calories remaining for day - warn if going over target"""
             elif "gain" in goal_lower or "muscle" in goal_lower:
                 health_goal_guidance = """
 **💪 MUSCLE GAIN GOAL ACTIVE:**
@@ -812,7 +939,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 {phase_context}
 
 **User Context:**
-- Budget: {budget}
+- User Name: {user_name or "there"}  (Use this for personalization when appropriate)
 - Foods user eats often: {top_foods_str}
 - Current meal: {food_list}
 
@@ -887,59 +1014,60 @@ All percentages are capped at 100% to avoid confusion. If a nutrient shows 100%,
 {health_goal_guidance}
 
 **NIGERIAN MEAL COMBO KNOWLEDGE BASE:**
-Generate smart meal combos using Nigerian foods. Examples available:
-- Ugu soup (8.2mg iron, 24g protein per 300g)
-- Jollof Rice (145 cal, 2.6g protein per 100g)
-- Grilled Fish (35g protein, 120mg calcium per 200g)
-- Eba (330 cal, 78g carbs per 200g)
-- Egusi Soup (18g protein, 6mg iron per 250g)
-- Moin Moin (15g protein, 180mg calcium per 200g)
-- Efo Riro (7.4mg iron, 380μg vitamin A per 250g)
-- Fried Plantain (1127μg vitamin A per 100g)
-- Grilled Chicken (37.5g protein per 150g)
-- Beans (12g protein, 4.6mg iron per cup)
+Generate smart meal combos using Nigerian foods relevant to user's {primary_gap} gap.
+Foods available (dynamically retrieved based on nutrient needs):
+
+{dynamic_food_list}
 
 **MEAL COMBO GENERATION RULES:**
 1. Generate ONE complete Nigerian meal combo for next meal
-2. Combo format: "Main dish (portion) + Protein source (portion) ± Swallow/Side (portion)"
-3. Target user's PRIMARY nutrient gap: {primary_gap}
-4. Respect health goal{' - WEIGHT LOSS: keep combo under 500-600 cal' if user_health_goals and 'lose' in user_health_goals.lower() else ''}
-5. Include realistic Nigerian portions
-6. Calculate total nutrients for the combo
+2. Combo format: "Main dish + Protein source ± Swallow/Side" (NO gram measurements!)
+3. Use qualitative portion sizes ONLY: small/medium/large/generous
+4. Target user's PRIMARY nutrient gap: {primary_gap}
+5. Respect health goal{' - WEIGHT LOSS: suggest lighter combos, skip or reduce swallow' if user_health_goals and 'lose' in user_health_goals.lower() else ''}
+6. Use qualitative nutrient descriptions (rich in iron, good protein, etc.)
 
 Example combos:
-- "Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)" = 8mg iron, 45g protein, 520 cal
-- "Efo riro (250g) + Fish (150g) - skip swallow" = 7mg iron, 30g protein, 320 cal (weight loss friendly)
-- "Jollof Rice (200g) + Grilled chicken (150g)" = 38g protein, 650 cal
+- "Ugu soup + Grilled fish + small Eba" - rich in iron and protein
+- "Efo riro + Fish - skip swallow" - rich in iron and protein, low calorie (weight loss friendly)
+- "Jollof Rice + Grilled chicken" - good protein and energy
 
 **Your Task:**
 Generate a CONCISE, HONEST JSON response with ONLY these fields:
 {{
     "message": "2-3 sentences max. HONEST assessment of meal quality - don't celebrate if meal is poor.
-                Mention what's good, what's missing. Reference health goal if relevant: {user_health_goals or 'general wellness'}.
-                Keep it real and helpful. Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ vitamin A, ⚡ calories.
+                CRITICAL: ALWAYS reference the SPECIFIC foods user logged (e.g., 'Your Egusi soup with fish...').
+                Make it personal and specific to THIS meal, not generic advice.
+                Use qualitative language for nutrients (great/good/low protein) - NO specific measurements like '30g' or '8mg'.
+                Only mention kcal when critical for decision-making (especially weight loss/gain goals).
+                Reference health goal if relevant: {user_health_goals or 'general wellness'}.
+                Celebrate streaks when current_streak >= 3.
+                Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ vitamin A, ⚡ calories, 🔥 streaks.
 
                 Examples:
-                - GOOD meal: '{meal_size} for {meal_type}! Great protein (30g 💪) and iron (8mg 🩸). You have 1050 kcal left for dinner.'
-                - POOR meal: 'This Jollof Rice (800 cal ⚡) puts you over your weight loss budget. Low in protein (8g) and iron (2mg). For dinner, eat lighter to stay on track.'
-                - OKAY meal: '{meal_size} for {meal_type}. Decent carbs (45g 🍚) but low protein (6g). Add fish or chicken next time for balance.'",
+                - GOOD meal WITH STREAK: '{user_name or "Great job"}, {current_streak}-day streak! 🔥 Your Egusi soup with fish was excellent! Great protein 💪 and iron 🩸. You have ~1050 kcal left for dinner.'
+                - GOOD meal: 'Your {meal_type} of Jollof rice with chicken was solid! Good protein and energy. Keep it balanced with vegetables next time.'
+                - POOR meal (weight loss): 'Your fried plantain with rice (800 kcal ⚡) puts you over target. Low protein and iron. Eat lighter for dinner to stay on track.'
+                - OKAY meal: 'Your Eba with vegetable soup was decent. Good carbs but low protein. Add fish or chicken next time for balance.'",
 
     "next_meal_combo": {{
-        "combo": "ONE specific Nigerian meal combo from knowledge base. Format: 'Main dish (portion) + Protein (portion) ± Side (portion)'.
-                  Example: 'Ugu soup (300g) + Grilled fish (150g) + small Eba (100g)' OR 'Efo riro (250g) + Fish (150g) - skip swallow' (for weight loss)",
+        "combo": "ONE specific Nigerian meal combo. Format: 'Main dish + Protein ± Side'.
+                  NO portion sizes in grams! Just describe portions qualitatively (small/medium/large).
+                  Example: 'Ugu soup + Grilled fish + small Eba' OR 'Efo riro + Fish - skip swallow' (for weight loss)",
 
         "why": "One sentence explaining how this combo closes {primary_gap} gap and fits {user_health_goals or 'goal'}.
-                Example: 'Only 320 cal, gives you 7mg iron + 30g protein without breaking calorie budget'"
+                Use qualitative language - NO specific grams/mg.
+                Example: 'Low calorie, rich in iron and protein while keeping you within daily target'"
     }},
 
     "goal_progress": {{
         "type": "{user_health_goals or 'general_wellness'}",  // User's actual health goal
         "status": "excellent | on_track | needs_attention",  // Honest assessment
-        "message": "One sentence about progress toward goal.
+        "message": "One sentence about progress toward goal. Use kcal when relevant for weight goals.
                     Examples:
-                    - Weight loss: 'You're at 1650/1800 cal today - only 150 left for dinner. Stay disciplined!'
-                    - Muscle gain: 'Great protein today (95g/120g target). One more high-protein meal and you're there!'
-                    - Pregnancy: 'Iron at 18mg/27mg target. Tonight's combo will get you to 26mg - almost there!'"
+                    - Weight loss: 'You're at 1650/1800 kcal today - only 150 left for dinner. Stay disciplined!'
+                    - Muscle gain: 'Great protein today! One more high-protein meal and you'll hit your target.'
+                    - General wellness: 'Good balance today. Your iron and protein levels are looking solid!'"
     }}
 }}
 
@@ -1223,7 +1351,6 @@ Generate the JSON now:"""
         # Extract user context
         is_pregnant = user_context.get("is_pregnant", False)
         health_goals = user_context.get("health_goals", [])
-        budget = user_context.get("budget", "mid")
 
         # Determine appropriate RDVs
         iron_rdv = self.rdv["iron_pregnant"] if is_pregnant else self.rdv["iron"]
@@ -1366,7 +1493,7 @@ Generate the JSON now:"""
         )
 
         # Generate next steps
-        next_steps = self._generate_next_steps(nutrient_insights, budget)
+        next_steps = self._generate_next_steps(nutrient_insights)
 
         # Build result
         result = {
@@ -1472,8 +1599,7 @@ Generate the JSON now:"""
 
     def _generate_next_steps(
         self,
-        nutrient_insights: List[Dict[str, Any]],
-        budget: str
+        nutrient_insights: List[Dict[str, Any]]
     ) -> List[str]:
         """Generate actionable next steps based on nutrition gaps."""
         next_steps = []
@@ -1494,34 +1620,19 @@ Generate the JSON now:"""
             nutrient = ni["nutrient"]
 
             if nutrient == "iron":
-                if budget == "low":
-                    next_steps.append(
-                        "Add affordable iron-rich foods: beans, Efo Riro (spinach), or liver"
-                    )
-                else:
-                    next_steps.append(
-                        "Include iron-rich proteins: fish, chicken, or red meat with vegetables"
-                    )
+                next_steps.append(
+                    "Add iron-rich foods: beans, Efo Riro (spinach), liver, fish, chicken, or red meat with vegetables"
+                )
 
             elif nutrient == "protein":
-                if budget == "low":
-                    next_steps.append(
-                        "Boost protein with budget-friendly options: beans, Moi Moi, eggs, or groundnuts"
-                    )
-                else:
-                    next_steps.append(
-                        "Add protein to each meal: fish, chicken, or meat with your meals"
-                    )
+                next_steps.append(
+                    "Boost protein: beans, Moi Moi, eggs, groundnuts, fish, chicken, or meat"
+                )
 
             elif nutrient == "calcium":
-                if budget == "low":
-                    next_steps.append(
-                        "Increase calcium with: sardines (with bones), local milk, or leafy greens"
-                    )
-                else:
-                    next_steps.append(
-                        "Add calcium sources: dairy products, fish with bones, or fortified foods"
-                    )
+                next_steps.append(
+                    "Increase calcium: sardines (with bones), milk, leafy greens, dairy products, or fortified foods"
+                )
 
         # Always add a tracking reminder
         next_steps.append("Log your next meal to continue tracking your progress")
@@ -1531,7 +1642,6 @@ Generate the JSON now:"""
     def _tool_suggest_meals(
         self,
         nutrient_needs: List[str],
-        budget: str = "mid",
         meal_type: str = "lunch"
     ) -> str:
         """
@@ -1539,7 +1649,6 @@ Generate the JSON now:"""
 
         Args:
             nutrient_needs: List of nutrients to focus on
-            budget: Budget tier (low, mid, high)
             meal_type: Type of meal
 
         Returns:
@@ -1547,7 +1656,7 @@ Generate the JSON now:"""
         """
         logger.info(
             f"🔧 Tool: suggest_meals "
-            f"(nutrients={nutrient_needs}, budget={budget}, type={meal_type})"
+            f"(nutrients={nutrient_needs}, type={meal_type})"
         )
 
         # Nigerian meal suggestions database (simplified)
@@ -1556,19 +1665,16 @@ Generate the JSON now:"""
                 {
                     "name": "Akara and Pap",
                     "nutrients": ["protein", "iron"],
-                    "budget": "low",
                     "ingredients": ["beans", "pepper", "onion", "corn"]
                 },
                 {
                     "name": "Bread and Eggs with Tea",
                     "nutrients": ["protein", "calcium"],
-                    "budget": "low",
                     "ingredients": ["bread", "eggs", "milk"]
                 },
                 {
                     "name": "Moi Moi with Ogi",
                     "nutrients": ["protein", "iron"],
-                    "budget": "mid",
                     "ingredients": ["beans", "eggs", "crayfish", "corn"]
                 }
             ],
@@ -1576,19 +1682,16 @@ Generate the JSON now:"""
                 {
                     "name": "Efo Riro with Eba",
                     "nutrients": ["iron", "vitamin_a", "calcium"],
-                    "budget": "low",
                     "ingredients": ["spinach", "palm oil", "crayfish", "garri"]
                 },
                 {
                     "name": "Jollof Rice with Chicken",
                     "nutrients": ["protein", "iron"],
-                    "budget": "mid",
                     "ingredients": ["rice", "tomatoes", "chicken", "vegetables"]
                 },
                 {
                     "name": "Egusi Soup with Pounded Yam",
                     "nutrients": ["protein", "iron", "calcium"],
-                    "budget": "mid",
                     "ingredients": ["egusi", "leafy vegetables", "meat", "yam"]
                 }
             ],
@@ -1596,50 +1699,40 @@ Generate the JSON now:"""
                 {
                     "name": "Pepper Soup with Fish",
                     "nutrients": ["protein", "calcium", "iron"],
-                    "budget": "low",
                     "ingredients": ["fish", "pepper", "spices", "yam"]
                 },
                 {
                     "name": "Beans and Plantain",
                     "nutrients": ["protein", "iron"],
-                    "budget": "low",
                     "ingredients": ["beans", "plantain", "palm oil"]
                 },
                 {
                     "name": "Okra Soup with Fufu",
                     "nutrients": ["iron", "calcium"],
-                    "budget": "mid",
                     "ingredients": ["okra", "fish", "crayfish", "cassava"]
                 }
             ]
         }
 
-        # Filter suggestions by meal type and budget
+        # Filter suggestions by meal type and nutrients
         suggestions = []
         for meal in meal_database.get(meal_type, []):
-            # Check if meal matches budget
-            meal_budget_tier = {"low": 0, "mid": 1, "high": 2}
-            user_budget_tier = {"low": 0, "mid": 1, "high": 2}
+            # Check if meal provides needed nutrients
+            meal_nutrients = set(meal["nutrients"])
+            needed_nutrients = set(nutrient_needs)
 
-            if meal_budget_tier.get(meal["budget"], 0) <= user_budget_tier.get(budget, 1):
-                # Check if meal provides needed nutrients
-                meal_nutrients = set(meal["nutrients"])
-                needed_nutrients = set(nutrient_needs)
-
-                if meal_nutrients & needed_nutrients:  # Intersection
-                    suggestions.append({
-                        "meal_name": meal["name"],
-                        "meal_type": meal_type,
-                        "ingredients": meal["ingredients"],
-                        "estimated_cost": meal["budget"],
-                        "key_nutrients": {
-                            nutrient: 0 for nutrient in meal["nutrients"]  # Placeholder
-                        },
-                        "why_recommended": (
-                            f"This meal is rich in {', '.join(list(meal_nutrients & needed_nutrients))} "
-                            f"and fits your {budget} budget."
-                        )
-                    })
+            if meal_nutrients & needed_nutrients:  # Intersection
+                suggestions.append({
+                    "meal_name": meal["name"],
+                    "meal_type": meal_type,
+                    "ingredients": meal["ingredients"],
+                    "key_nutrients": {
+                        nutrient: 0 for nutrient in meal["nutrients"]  # Placeholder
+                    },
+                    "why_recommended": (
+                        f"This meal is rich in {', '.join(list(meal_nutrients & needed_nutrients))}"
+                    )
+                })
 
         logger.info(f"   ✓ Generated {len(suggestions)} meal suggestions")
 
