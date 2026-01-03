@@ -319,6 +319,8 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         # Prepare bboxes and food types for batch processing
                         bboxes_for_batch = []
                         food_types_for_batch = []
+                        food_to_batch_index = {}  # Track which batch result goes to which food
+                        extra_sub_bboxes = []  # Pool of unused sub-bboxes from splitting
 
                         for idx, food in enumerate(detected_foods):
                             if idx < len(bboxes_sorted):
@@ -344,14 +346,33 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                     )
 
                                     if sub_bboxes and len(sub_bboxes) > 0:
-                                        logger.info(f"✅ Split into {len(sub_bboxes)} regions for {food.get('name')}")
+                                        logger.info(f"✅ Split into {len(sub_bboxes)} regions")
+                                        # Use first sub-bbox for current food
                                         best_bbox = sub_bboxes[0]["bbox"]
                                         x1, y1, x2, y2 = [int(c) for c in best_bbox]
 
+                                        # Save remaining sub-bboxes for foods without bboxes
+                                        if len(sub_bboxes) > 1:
+                                            extra_sub_bboxes.extend(sub_bboxes[1:])
+                                            logger.info(f"   → Saved {len(sub_bboxes)-1} extra regions for foods without bboxes")
+
+                                # Add to batch
+                                food_to_batch_index[idx] = len(bboxes_for_batch)
                                 bboxes_for_batch.append((x1, y1, x2, y2))
                                 food_types_for_batch.append(food.get("name"))
                             else:
-                                logger.warning(f"⚠️ No bbox for {food.get('name')}, will use default")
+                                # Food has no bbox - try to use extra sub-bboxes from splitting
+                                if extra_sub_bboxes:
+                                    sub_bbox = extra_sub_bboxes.pop(0)
+                                    x1, y1, x2, y2 = [int(c) for c in sub_bbox["bbox"]]
+                                    food_to_batch_index[idx] = len(bboxes_for_batch)
+                                    bboxes_for_batch.append((x1, y1, x2, y2))
+                                    food_types_for_batch.append(food.get("name"))
+                                    logger.info(f"✅ {food.get('name')}: Using split region from oversized bbox")
+                                else:
+                                    # No bbox available - assign default portion later
+                                    logger.warning(f"⚠️ No bbox for {food.get('name')}, will use default portion (150g)")
+                                    food_to_batch_index[idx] = None  # Mark as no bbox
 
                         # 🚀 BATCH PROCESSING: Single API call for all foods!
                         logger.info(f"🚀 Using BATCH API for {len(bboxes_for_batch)} foods (single depth estimation run)")
@@ -364,20 +385,29 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 reference_object="plate"
                             )
 
-                            # Assign results to foods
-                            for food, result in zip(detected_foods, batch_results):
-                                portion_grams = result.get("portion_grams", 200.0)
+                            # Assign results to foods using mapping
+                            for idx, food in enumerate(detected_foods):
+                                batch_idx = food_to_batch_index.get(idx)
 
-                                # Cap at reasonable max
-                                if portion_grams > MAX_REASONABLE_PORTION_PER_FOOD:
-                                    logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION_PER_FOOD}g")
-                                    portion_grams = MAX_REASONABLE_PORTION_PER_FOOD
+                                if batch_idx is not None:
+                                    # Food has a bbox - get result from batch
+                                    result = batch_results[batch_idx]
+                                    portion_grams = result.get("portion_grams", 200.0)
 
-                                food["estimated_grams"] = portion_grams
-                                logger.info(
-                                    f"✓ {food.get('name')}: {portion_grams:.1f}g "
-                                    f"(confidence: {result.get('confidence', 0):.2f})"
-                                )
+                                    # Cap at reasonable max
+                                    if portion_grams > MAX_REASONABLE_PORTION_PER_FOOD:
+                                        logger.warning(f"⚠️ {food.get('name')}: {portion_grams}g → capped at {MAX_REASONABLE_PORTION_PER_FOOD}g")
+                                        portion_grams = MAX_REASONABLE_PORTION_PER_FOOD
+
+                                    food["estimated_grams"] = portion_grams
+                                    logger.info(
+                                        f"✓ {food.get('name')}: {portion_grams:.1f}g "
+                                        f"(confidence: {result.get('confidence', 0):.2f})"
+                                    )
+                                else:
+                                    # Food has no bbox - use default portion
+                                    food["estimated_grams"] = 150.0
+                                    logger.info(f"✓ {food.get('name')}: 150.0g (default, no bbox)")
 
                         except Exception as e:
                             logger.error(f"❌ Batch estimation failed: {e}, using defaults")
