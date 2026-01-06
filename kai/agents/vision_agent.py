@@ -313,7 +313,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
 
                         # ⚡ NEW BATCH API: Process all foods in ONE API call!
                         # This is 75% faster than the old parallel approach
-                        MAX_REASONABLE_PORTION_PER_FOOD = 600.0
+                        MAX_REASONABLE_PORTION_PER_FOOD = 300.0  # Based on Nigerian portion research (150-250g typical)
                         img_height, img_width = img_array.shape[:2]
 
                         # Prepare bboxes and food types for batch processing
@@ -342,7 +342,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                         image=img_array,
                                         bbox=bbox,
                                         num_expected_foods=len(detected_foods),
-                                        area_threshold=0.7
+                                        area_threshold=0.5  # Lowered from 0.7 to catch more oversized bboxes
                                     )
 
                                     if sub_bboxes and len(sub_bboxes) > 0:
@@ -416,9 +416,9 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 food["estimated_grams"] = 200.0
 
                         # CRITICAL FIX: Check total meal portion and scale down if unrealistic
-                        # Nigerian meals typically 300-800g total (plate + all components)
+                        # Nigerian meals typically 400-650g total (plate + all components)
                         total_estimated = sum(food["estimated_grams"] for food in detected_foods)
-                        MAX_REASONABLE_MEAL = 800.0
+                        MAX_REASONABLE_MEAL = 650.0  # Based on research: breakfast ~550g, lunch/dinner ~650g
 
                         if total_estimated > MAX_REASONABLE_MEAL:
                             scale_factor = MAX_REASONABLE_MEAL / total_estimated
@@ -449,7 +449,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         )
                         portion_grams = portion.get("portion_grams")
 
-                        MAX_REASONABLE_MEAL = 800.0  # Same as Florence-2 path for consistency
+                        MAX_REASONABLE_MEAL = 650.0  # Same as Florence-2 path for consistency
                         if portion_grams and portion_grams > 0:
                             if portion_grams > MAX_REASONABLE_MEAL:
                                 logger.warning(f"⚠️ Total portion {portion_grams}g exceeds max ({MAX_REASONABLE_MEAL}g), capping")

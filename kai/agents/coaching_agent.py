@@ -735,7 +735,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             query = nutrient_queries.get(primary_gap.lower(), f"Nigerian foods rich in {primary_gap}")
 
             # Search ChromaDB
-            results = self.vector_db.search(query, top_k=top_k)
+            results = self.vector_db.search(query, n_results=top_k)
 
             logger.info(f"   → Retrieved {len(results)} foods from ChromaDB for {primary_gap} gap")
             return results
@@ -775,20 +775,30 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             # Build qualitative description based on nutrient content
             highlights = []
 
-            # Highlight primary gap nutrient
-            if primary_gap == "iron" and nutrients.get("iron", 0) > 3:
+            # Typical serving size for calculation (200g)
+            typical_serving_g = 200
+
+            # Calculate %RDV for typical serving (using women's RDV as baseline)
+            # Women's RDV: protein 46g, iron 18mg, calcium 1000mg, vitamin A 700mcg
+            iron_pct = (nutrients.get("iron", 0) * typical_serving_g / 100) / 18 * 100
+            protein_pct = (nutrients.get("protein", 0) * typical_serving_g / 100) / 46 * 100
+            calcium_pct = (nutrients.get("calcium", 0) * typical_serving_g / 100) / 1000 * 100
+            vitamin_a_pct = (nutrients.get("vitamin_a", 0) * typical_serving_g / 100) / 700 * 100
+
+            # Highlight primary gap nutrient (using %RDV thresholds)
+            if primary_gap == "iron" and iron_pct >= 40:  # >=40% RDV
                 highlights.append("rich in iron")
-            elif primary_gap == "protein" and nutrients.get("protein", 0) > 10:
+            elif primary_gap == "protein" and protein_pct >= 40:  # >=40% RDV
                 highlights.append("excellent protein")
-            elif primary_gap == "calcium" and nutrients.get("calcium", 0) > 100:
+            elif primary_gap == "calcium" and calcium_pct >= 40:  # >=40% RDV
                 highlights.append("high calcium")
-            elif primary_gap == "vitamin_a" and nutrients.get("vitamin_a", 0) > 500:
+            elif primary_gap == "vitamin_a" and vitamin_a_pct >= 40:  # >=40% RDV
                 highlights.append("rich in vitamin A")
 
             # Add other notable nutrients
-            if nutrients.get("protein", 0) > 15 and "protein" not in primary_gap:
+            if protein_pct >= 30 and "protein" not in primary_gap:
                 highlights.append("good protein")
-            if nutrients.get("iron", 0) > 5 and "iron" not in primary_gap:
+            if iron_pct >= 30 and "iron" not in primary_gap:
                 highlights.append("high iron")
 
             # Describe calorie level
@@ -1043,6 +1053,18 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
                 Reference health goal if relevant: {user_health_goals or 'general wellness'}.
                 Celebrate streaks when current_streak >= 3.
                 Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ vitamin A, ⚡ calories, 🔥 streaks.
+
+                **CRITICAL NUTRIENT RULES:**
+                - Protein >= 40% RDV: NEVER say 'low protein'. Say 'great protein 💪' or 'excellent protein 💪'
+                - Iron >= 40% RDV: NEVER say 'low iron'. Say 'great iron 🩸' or 'excellent iron 🩸'
+                - Calcium >= 40% RDV: NEVER say 'low calcium'. Say 'great calcium 🦴' or 'excellent calcium 🦴'
+                - Vitamin A >= 40% RDV: NEVER say 'low vitamin A'. Say 'great vitamin A 👁️' or 'excellent vitamin A 👁️'
+                - Zinc >= 40% RDV: NEVER say 'low zinc'. Say 'great zinc' or 'good zinc'
+                - Only flag nutrients as 'low' if they are < 20% RDV
+                - Examples:
+                  * 29g protein (48% RDV) = 'Great protein! 💪' NOT 'low in protein'
+                  * 8mg iron (44% RDV for women) = 'Great iron! 🩸' NOT 'low in iron'
+                  * 450mg calcium (45% RDV) = 'Great calcium! 🦴' NOT 'low in calcium'
 
                 Examples:
                 - GOOD meal WITH STREAK: '{user_name or "Great job"}, {current_streak}-day streak! 🔥 Your Egusi soup with fish was excellent! Great protein 💪 and iron 🩸. You have ~1050 kcal left for dinner.'
@@ -1358,26 +1380,32 @@ Generate the JSON now:"""
         # Calculate nutrient insights
         nutrient_insights = []
 
-        # Iron insight
+        # Iron insight (Evidence-based thresholds)
         iron_percentage = (knowledge_result.total_iron / iron_rdv) * 100
-        if iron_percentage < 30:
-            iron_status = "deficient"
+        if iron_percentage < 50:
+            iron_status = "low"  # Changed from "deficient" - <50% needs attention
             iron_advice = (
                 "Your iron intake is quite low. Iron is crucial for preventing anemia, "
                 "especially for Nigerian women. Try adding iron-rich foods like Efo Riro "
                 "(spinach soup), beans, or organ meats to your meals."
             )
-        elif iron_percentage < 70:
-            iron_status = "adequate"
+        elif iron_percentage < 75:
+            iron_status = "moderate"  # Changed from "adequate" - 50-74% could improve
             iron_advice = (
                 "You're getting some iron, but there's room for improvement. Consider adding "
                 "more leafy greens like Efo Riro or protein sources like beans to boost your intake."
             )
-        else:
-            iron_status = "optimal"
+        elif iron_percentage < 100:
+            iron_status = "good"  # New tier - 75-99% is adequate
             iron_advice = (
-                "Excellent work! Your iron intake is good. Keep including iron-rich foods "
-                "like leafy greens and proteins in your meals."
+                "Good iron intake! You're getting most of what you need. Keep including "
+                "iron-rich foods like leafy greens and proteins in your meals."
+            )
+        else:
+            iron_status = "excellent"  # Changed from "optimal" - ≥100% is excellent
+            iron_advice = (
+                "Excellent work! Your iron intake is meeting or exceeding your daily needs. "
+                "Keep including iron-rich foods like leafy greens and proteins in your meals."
             )
 
         nutrient_insights.append({
@@ -1389,24 +1417,30 @@ Generate the JSON now:"""
             "advice": iron_advice
         })
 
-        # Protein insight
+        # Protein insight (Evidence-based thresholds)
         protein_percentage = (knowledge_result.total_protein / self.rdv["protein"]) * 100
-        if protein_percentage < 30:
-            protein_status = "deficient"
+        if protein_percentage < 50:
+            protein_status = "low"  # Changed from "deficient" - <50% needs attention
             protein_advice = (
                 "Your protein intake is low. Protein is essential for body repair and strength. "
                 "Try adding affordable protein like beans, eggs, or fish to your meals."
             )
-        elif protein_percentage < 70:
-            protein_status = "adequate"
+        elif protein_percentage < 75:
+            protein_status = "moderate"  # Changed from "adequate" - 50-74% could improve
             protein_advice = (
                 "You're getting decent protein, but you can do better. Consider adding more "
                 "protein sources like Moi Moi (bean pudding), fish, or chicken."
             )
-        else:
-            protein_status = "optimal"
+        elif protein_percentage < 100:
+            protein_status = "good"  # New tier - 75-99% is adequate
             protein_advice = (
-                "Great job on protein! You're meeting your body's needs well. "
+                "Good protein intake! You're getting most of what you need for body repair and strength. "
+                "Keep it up!"
+            )
+        else:
+            protein_status = "excellent"  # Changed from "optimal" - ≥100% is excellent
+            protein_advice = (
+                "Excellent protein! You're meeting or exceeding your body's needs. "
                 "Keep including protein in each meal."
             )
 
@@ -1419,25 +1453,32 @@ Generate the JSON now:"""
             "advice": protein_advice
         })
 
-        # Calcium insight
+        # Calcium insight (Evidence-based thresholds)
         calcium_percentage = (knowledge_result.total_calcium / self.rdv["calcium"]) * 100
-        if calcium_percentage < 30:
-            calcium_status = "deficient"
+        if calcium_percentage < 50:
+            calcium_status = "low"  # Changed from "deficient" - <50% needs attention
             calcium_advice = (
                 "Your calcium intake needs attention. Calcium is vital for strong bones, "
                 "especially during pregnancy. Try adding more dairy, fish with bones, or "
                 "leafy greens to your diet."
             )
-        elif calcium_percentage < 70:
-            calcium_status = "adequate"
+        elif calcium_percentage < 75:
+            calcium_status = "moderate"  # Changed from "adequate" - 50-74% could improve
             calcium_advice = (
                 "You're getting some calcium, but more would be beneficial. Consider adding "
                 "foods like milk, sardines, or vegetables to boost your intake."
             )
-        else:
-            calcium_status = "optimal"
+        elif calcium_percentage < 100:
+            calcium_status = "good"  # New tier - 75-99% is adequate
             calcium_advice = (
-                "Wonderful! Your calcium intake is strong. This is great for your bone health."
+                "Good calcium intake! You're getting most of what you need for strong bones. "
+                "Keep it up!"
+            )
+        else:
+            calcium_status = "excellent"  # Changed from "optimal" - ≥100% is excellent
+            calcium_advice = (
+                "Excellent! Your calcium intake is meeting or exceeding your daily needs. "
+                "This is great for your bone health."
             )
 
         nutrient_insights.append({
@@ -1863,13 +1904,29 @@ Generate the JSON now:"""
 
         # Classify quality
         protein_pct = nutrient_percentages['protein']
+        iron_pct = nutrient_percentages['iron']
+        calcium_pct = nutrient_percentages['calcium']
+        vitamin_a_pct = nutrient_percentages['vitamin_a']
+        zinc_pct = nutrient_percentages['zinc']
+
         high_count = len(high_nutrients)
         low_count = len(low_nutrients)
 
+        # Explicit nutrient protection: High key nutrients should NEVER result in "poor" quality
+        protein_is_high = protein_pct >= 40  # >40% RDV = HIGH (24g for women, 28g for men)
+        iron_is_high = iron_pct >= 40  # >40% RDV = HIGH (7.2mg for women, 3.2mg for men)
+        calcium_is_high = calcium_pct >= 40  # >40% RDV = HIGH (400mg)
+        vitamin_a_is_high = vitamin_a_pct >= 40  # >40% RDV = HIGH (280-360mcg)
+        zinc_is_high = zinc_pct >= 40  # >40% RDV = HIGH (3.2-4.4mg)
+
+        # Any key nutrient being high protects meal quality
+        any_key_nutrient_high = (protein_is_high or iron_is_high or calcium_is_high or
+                                 vitamin_a_is_high or zinc_is_high)
+
         if protein_pct >= 30 and high_count >= 3:
             quality = "excellent"  # High protein + 3+ nutrients above 40%
-        elif high_count >= 2:
-            quality = "good"  # 2+ nutrients above 40%
+        elif high_count >= 2 or any_key_nutrient_high:
+            quality = "good"  # 2+ nutrients above 40% OR any key nutrient protects from low rating
         elif low_count >= 5 and protein_pct < 15:
             quality = "poor"  # 5+ nutrients below 20% AND low protein
         else:

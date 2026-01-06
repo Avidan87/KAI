@@ -109,8 +109,8 @@ class FlorenceBBoxDetector:
         try:
             import torch
 
-            # Task prompt for object detection
-            prompt = "<OD>"
+            # Task prompt for dense region detection (better for multi-component plates)
+            prompt = "<DENSE_REGION_CAPTION>"
 
             # Prepare inputs (from official docs)
             inputs = self.processor(
@@ -141,13 +141,28 @@ class FlorenceBBoxDetector:
             # Parse output (from official docs)
             parsed_answer = self.processor.post_process_generation(
                 generated_text,
-                task="<OD>",
+                task="<DENSE_REGION_CAPTION>",
                 image_size=(pil_image.width, pil_image.height)
             )
 
-            # Extract detections
+            # Extract detections (supports both <OD> and <DENSE_REGION_CAPTION>)
             detections = []
-            if '<OD>' in parsed_answer:
+
+            # Try DENSE_REGION_CAPTION first (preferred for fine-grained detection)
+            if '<DENSE_REGION_CAPTION>' in parsed_answer:
+                result = parsed_answer['<DENSE_REGION_CAPTION>']
+                bboxes = result.get('bboxes', [])
+                labels = result.get('labels', [])
+
+                for bbox, label in zip(bboxes, labels):
+                    detections.append({
+                        "bbox": bbox,  # [x1, y1, x2, y2]
+                        "label": label,
+                        "confidence": 0.9  # Florence-2 doesn't return confidence scores
+                    })
+
+            # Fallback to OD for backward compatibility
+            elif '<OD>' in parsed_answer:
                 od_result = parsed_answer['<OD>']
                 bboxes = od_result.get('bboxes', [])
                 labels = od_result.get('labels', [])
@@ -217,7 +232,7 @@ def split_oversized_bbox(
     image: np.ndarray,
     bbox: List[float],
     num_expected_foods: int = 2,
-    area_threshold: float = 0.7
+    area_threshold: float = 0.5  # Lowered from 0.7 to trigger splitting earlier
 ) -> List[Dict[str, any]]:
     """
     Split an oversized bounding box into separate food regions using K-Means clustering.
@@ -279,7 +294,7 @@ def split_oversized_bbox(
         # Apply K-Means clustering
         from sklearn.cluster import KMeans
 
-        k = min(num_expected_foods, 4)  # Cap at 4 clusters max
+        k = min(num_expected_foods, 6)  # Cap at 6 clusters max (increased for complex Nigerian plates)
         logger.info(f"Running K-Means with K={k} clusters on {len(pixels)} pixels")
 
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
