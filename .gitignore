@@ -65,3 +65,6 @@ htmlcov/
 *.tmp
 temp/
 tmp/
+
+# Model checkpoints (too large for GitHub - downloaded during setup)
+models/sam2/*.pt
