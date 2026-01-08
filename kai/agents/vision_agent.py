@@ -20,7 +20,7 @@ import os
 
 from kai.models import VisionResult, DetectedFood
 from kai.mcp_servers.depth_estimation_client import get_portion_estimate, get_portions_batch
-from kai.agents.florence_bbox import FlorenceBBoxDetector, split_oversized_bbox, merge_nearby_bboxes
+from kai.agents.sam_segmentation import SAMFoodSegmenter
 import numpy as np
 from PIL import Image
 
@@ -70,7 +70,7 @@ class VisionAgent:
         # Create agent instructions
         agent_instructions = f"""You are KAI's Vision Agent, an expert in Nigerian food recognition.
 
-Your mission is to accurately detect and identify Nigerian foods from meal images to help Nigerian women track their nutrition intake.
+Your mission is to accurately detect and identify Nigerian foods from meal images to help Nigerians track their nutrition intake.
 
 **Your Expertise:**
 - 50+ Nigerian dishes including: {', '.join(self.known_foods[:10])}... and more
@@ -87,7 +87,7 @@ Your mission is to accurately detect and identify Nigerian foods from meal image
 5. Provide culturally relevant context
 
 **Detection Priorities:**
-- Accuracy over speed - Nigerian women's health depends on correct tracking
+- Accuracy over speed - Nigerians' health depends on correct tracking
 - Cultural awareness - recognize regional variations and local names
 - Practical portions - use real-world Nigerian serving sizes
 - Clear communication - explain what you see and why
@@ -258,9 +258,9 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             # (We need detected_foods info for portion logic)
             detected_foods = result_dict.get("detected_foods", [])
             if (image_url or image_base64) and detected_foods:
-                logger.info("📏 Starting per-food portion estimation")
+                logger.info("📏 Starting per-food portion estimation with SAM segmentation")
 
-                # Decode image for Florence-2 and cropping
+                # Decode image for SAM segmentation
                 img_array = None
                 if image_base64:
                     img_bytes = base64.b64decode(image_base64)
@@ -271,108 +271,63 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                     response = httpx.get(image_url, timeout=30.0)
                     img_array = np.array(Image.open(io.BytesIO(response.content)))
 
-                # Try Florence-2 for per-food bounding boxes
-                use_florence = len(detected_foods) > 1 and img_array is not None
+                # Use SAM 2 for pixel-perfect food segmentation
+                use_sam = len(detected_foods) >= 1 and img_array is not None
 
-                if use_florence:
+                if use_sam:
                     try:
-                        logger.info("🔍 Using Florence-2 for per-food bounding boxes")
-                        florence = FlorenceBBoxDetector(device="cpu", model_variant="base")
-                        bboxes_detected = florence.detect_objects(img_array)
-                        florence.unload_model()
+                        logger.info("🔍 Using SAM 2 for pixel-perfect food segmentation")
 
-                        # Match food names to bboxes (spatial ordering: left-to-right, top-to-bottom)
-                        bboxes_sorted = sorted(bboxes_detected, key=lambda b: (b["bbox"][1], b["bbox"][0]))
+                        # Extract food names for segmentation
+                        food_names = [food.get("name") for food in detected_foods]
 
-                        logger.info(f"✓ Florence-2 detected {len(bboxes_sorted)} regions for {len(detected_foods)} foods")
+                        # Initialize SAM segmenter
+                        sam_segmenter = SAMFoodSegmenter(device="cpu", model_size="small")
 
-                        # CRITICAL FIX: Check for bbox overlaps (common in Nigerian multi-component plates)
-                        # Overlapping bboxes cause double-counting of shared regions → over-estimation
-                        total_overlap = 0
-                        for i in range(len(bboxes_sorted)):
-                            for j in range(i + 1, len(bboxes_sorted)):
-                                bbox1, bbox2 = bboxes_sorted[i]["bbox"], bboxes_sorted[j]["bbox"]
-                                x1_1, y1_1, x2_1, y2_1 = bbox1
-                                x1_2, y1_2, x2_2, y2_2 = bbox2
+                        # Get pixel-perfect masks for each food
+                        food_masks = sam_segmenter.segment_foods(
+                            image=img_array,
+                            food_names=food_names,
+                            use_automatic_segmentation=True
+                        )
+                        sam_segmenter.unload_model()
 
-                                # Calculate intersection area
-                                x_left, y_top = max(x1_1, x1_2), max(y1_1, y1_2)
-                                x_right, y_bottom = min(x2_1, x2_2), min(y2_1, y2_2)
+                        logger.info(f"✓ SAM 2 generated {len(food_masks)} pixel masks for {len(detected_foods)} foods")
 
-                                if x_right > x_left and y_bottom > y_top:
-                                    intersection = (x_right - x_left) * (y_bottom - y_top)
-                                    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
-                                    overlap_ratio = intersection / area1 if area1 > 0 else 0
-                                    total_overlap += overlap_ratio
-
-                        if total_overlap > 0.5:  # >50% cumulative overlap
-                            logger.warning(
-                                f"⚠️ High bbox overlap detected ({total_overlap:.1%}). "
-                                f"Foods likely on same plate - portions will be scaled to prevent double-counting."
-                            )
-
-                        # ⚡ NEW BATCH API: Process all foods in ONE API call!
-                        # This is 75% faster than the old parallel approach
-                        MAX_REASONABLE_PORTION_PER_FOOD = 300.0  # Based on Nigerian portion research (150-250g typical)
+                        # Convert masks to bboxes for batch depth estimation
+                        # (MCP server currently expects bboxes, we'll update it later to accept masks)
+                        MAX_REASONABLE_PORTION_PER_FOOD = 300.0  # Based on Nigerian portion research
                         img_height, img_width = img_array.shape[:2]
 
-                        # Prepare bboxes and food types for batch processing
                         bboxes_for_batch = []
                         food_types_for_batch = []
-                        food_to_batch_index = {}  # Track which batch result goes to which food
-                        extra_sub_bboxes = []  # Pool of unused sub-bboxes from splitting
+                        food_to_batch_index = {}
 
-                        for idx, food in enumerate(detected_foods):
-                            if idx < len(bboxes_sorted):
-                                bbox = bboxes_sorted[idx]["bbox"]  # [x1, y1, x2, y2]
-                                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                        for idx, (food_name, mask) in enumerate(food_masks.items()):
+                            # Convert pixel mask to bounding box (tight fit around masked region)
+                            ys, xs = np.where(mask)
 
-                                # Validate bbox size
-                                bbox_width, bbox_height = x2 - x1, y2 - y1
-                                bbox_area_ratio = (bbox_width * bbox_height) / (img_width * img_height)
+                            if len(xs) > 0 and len(ys) > 0:
+                                x1, x2 = int(np.min(xs)), int(np.max(xs))
+                                y1, y2 = int(np.min(ys)), int(np.max(ys))
 
-                                if bbox_area_ratio > 0.7:
-                                    logger.warning(
-                                        f"⚠️ {food.get('name')}: bbox covers {bbox_area_ratio:.1%} of image. "
-                                        f"Attempting intelligent split..."
-                                    )
+                                bbox_area = (x2 - x1) * (y2 - y1)
+                                mask_area = np.sum(mask)
+                                coverage = mask_area / bbox_area if bbox_area > 0 else 0
 
-                                    # Try to split oversized bbox
-                                    sub_bboxes = split_oversized_bbox(
-                                        image=img_array,
-                                        bbox=bbox,
-                                        num_expected_foods=len(detected_foods),
-                                        area_threshold=0.5  # Lowered from 0.7 to catch more oversized bboxes
-                                    )
+                                logger.info(
+                                    f"✓ {food_name}: mask covers {mask_area} pixels "
+                                    f"({mask_area / (img_width * img_height):.1%} of image, "
+                                    f"{coverage:.1%} fill ratio in bbox)"
+                                )
 
-                                    if sub_bboxes and len(sub_bboxes) > 0:
-                                        logger.info(f"✅ Split into {len(sub_bboxes)} regions")
-                                        # Use first sub-bbox for current food
-                                        best_bbox = sub_bboxes[0]["bbox"]
-                                        x1, y1, x2, y2 = [int(c) for c in best_bbox]
-
-                                        # Save remaining sub-bboxes for foods without bboxes
-                                        if len(sub_bboxes) > 1:
-                                            extra_sub_bboxes.extend(sub_bboxes[1:])
-                                            logger.info(f"   → Saved {len(sub_bboxes)-1} extra regions for foods without bboxes")
-
-                                # Add to batch
                                 food_to_batch_index[idx] = len(bboxes_for_batch)
                                 bboxes_for_batch.append((x1, y1, x2, y2))
-                                food_types_for_batch.append(food.get("name"))
+                                food_types_for_batch.append(food_name)
                             else:
-                                # Food has no bbox - try to use extra sub-bboxes from splitting
-                                if extra_sub_bboxes:
-                                    sub_bbox = extra_sub_bboxes.pop(0)
-                                    x1, y1, x2, y2 = [int(c) for c in sub_bbox["bbox"]]
-                                    food_to_batch_index[idx] = len(bboxes_for_batch)
-                                    bboxes_for_batch.append((x1, y1, x2, y2))
-                                    food_types_for_batch.append(food.get("name"))
-                                    logger.info(f"✅ {food.get('name')}: Using split region from oversized bbox")
-                                else:
-                                    # No bbox available - assign default portion later
-                                    logger.warning(f"⚠️ No bbox for {food.get('name')}, will use default portion (150g)")
-                                    food_to_batch_index[idx] = None  # Mark as no bbox
+                                # Empty mask - use default portion
+                                logger.warning(f"⚠️ {food_name}: empty mask, will use default portion (150g)")
+                                food_to_batch_index[idx] = None
 
                         # 🚀 BATCH PROCESSING: Single API call for all foods!
                         logger.info(f"🚀 Using BATCH API for {len(bboxes_for_batch)} foods (single depth estimation run)")
@@ -385,12 +340,12 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                 reference_object="plate"
                             )
 
-                            # Assign results to foods using mapping
+                            # Assign results to foods
                             for idx, food in enumerate(detected_foods):
                                 batch_idx = food_to_batch_index.get(idx)
 
                                 if batch_idx is not None:
-                                    # Food has a bbox - get result from batch
+                                    # Food has a mask - get result from batch
                                     result = batch_results[batch_idx]
                                     portion_grams = result.get("portion_grams", 200.0)
 
@@ -405,9 +360,9 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                                         f"(confidence: {result.get('confidence', 0):.2f})"
                                     )
                                 else:
-                                    # Food has no bbox - use default portion
+                                    # Food has no mask - use default portion
                                     food["estimated_grams"] = 150.0
-                                    logger.info(f"✓ {food.get('name')}: 150.0g (default, no bbox)")
+                                    logger.info(f"✓ {food.get('name')}: 150.0g (default, no mask)")
 
                         except Exception as e:
                             logger.error(f"❌ Batch estimation failed: {e}, using defaults")
@@ -415,7 +370,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                             for food in detected_foods:
                                 food["estimated_grams"] = 200.0
 
-                        # CRITICAL FIX: Check total meal portion and scale down if unrealistic
+                        # Check total meal portion and scale down if unrealistic
                         # Nigerian meals typically 400-650g total (plate + all components)
                         total_estimated = sum(food["estimated_grams"] for food in detected_foods)
                         MAX_REASONABLE_MEAL = 650.0  # Based on research: breakfast ~550g, lunch/dinner ~650g
@@ -436,11 +391,11 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                         depth_estimation_used = True
 
                     except Exception as e:
-                        logger.error(f"❌ Florence-2 failed: {e}, falling back to division method")
-                        use_florence = False
+                        logger.error(f"❌ SAM 2 segmentation failed: {e}, falling back to division method")
+                        use_sam = False
 
                 # Fallback: divide total portion evenly
-                if not use_florence:
+                if not use_sam:
                     try:
                         portion = await get_portion_estimate(
                             image_url=image_url,
