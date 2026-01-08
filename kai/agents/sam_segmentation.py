@@ -70,7 +70,10 @@ class SAMFoodSegmenter:
 
             # Build SAM 2 model
             checkpoint = self.checkpoints.get(self.model_size, "sam2_hiera_small.pt")
-            config = f"sam2_hiera_{self.model_size}.yaml"
+            # SAM 2.1 uses different config naming: sam2.1_hiera_s.yaml instead of sam2_hiera_small.yaml
+            size_map = {"tiny": "t", "small": "s", "base": "b+", "large": "l"}
+            config_suffix = size_map.get(self.model_size, "s")
+            config = f"sam2.1/sam2.1_hiera_{config_suffix}.yaml"
 
             self.model = build_sam2(
                 config_file=config,
