@@ -65,15 +65,20 @@ class SAMFoodSegmenter:
         try:
             logger.info(f"Loading SAM 2 ({self.model_size})...")
 
+            import sam2
+            import os
             from sam2.build_sam import build_sam2
             from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-            # Build SAM 2 model
-            checkpoint = self.checkpoints.get(self.model_size, "sam2_hiera_small.pt")
-            # SAM 2.1 uses different config naming: sam2.1_hiera_s.yaml instead of sam2_hiera_small.yaml
+            # Build SAM 2 model with absolute config path
+            checkpoint_filename = self.checkpoints.get(self.model_size, "sam2_hiera_small.pt")
+            checkpoint = os.path.join("models", "sam2", checkpoint_filename)
+            # Map model size to SAM 2.0 config naming (we have SAM 2.0 checkpoints)
             size_map = {"tiny": "t", "small": "s", "base": "b+", "large": "l"}
             config_suffix = size_map.get(self.model_size, "s")
-            config = f"sam2.1/sam2.1_hiera_{config_suffix}.yaml"
+            # Use absolute path to SAM 2.0 configs (compatible with our checkpoints)
+            config_dir = os.path.join(os.path.dirname(sam2.__file__), 'configs')
+            config = os.path.join(config_dir, 'sam2', f'sam2_hiera_{config_suffix}.yaml')
 
             self.model = build_sam2(
                 config_file=config,

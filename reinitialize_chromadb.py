@@ -75,7 +75,7 @@ if __name__ == "__main__":
     print("✅ CHROMADB REINITIALIZATION COMPLETE!")
     print("="*70)
     print("\nThe KAI system will now use the improved database with:")
-    print("  • 26 high-quality Nigerian foods")
+    print("  • 48 high-quality Nigerian foods")
     print("  • Accurate nutrition data from USDA, NFCT, WAFCT")
     print("  • Density and height fields for MiDaS accuracy")
     print("  • Preparation method for calorie precision")
