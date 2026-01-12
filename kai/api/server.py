@@ -61,6 +61,7 @@ from kai.database import (
     get_user_meals,
     get_daily_nutrition_totals,
 )
+from kai.services.railway_keepalive import start_keepalive, stop_keepalive
 
 
 @asynccontextmanager
@@ -69,9 +70,16 @@ async def lifespan(app: FastAPI):
     # Startup
     await initialize_database()
     print("✅ Database initialized")
+
+    # Start Railway keepalive service (prevents 60-90s cold starts)
+    start_keepalive()
+    print("✅ Railway keepalive service started")
+
     yield
-    # Shutdown (if needed, add cleanup code here)
-    # For example: await close_database_connections()
+
+    # Shutdown
+    stop_keepalive()
+    print("✅ Railway keepalive service stopped")
 
 
 app = FastAPI(

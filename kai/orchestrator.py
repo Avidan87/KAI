@@ -123,7 +123,7 @@ async def handle_user_request(
                 image_url=image_url,
                 meal_type=None,
             ),
-            timeout=150.0,  # Extended timeout: Depth Anything V2 estimation can take 60-90s on Railway CPU
+            timeout=200.0,  # Extended timeout: SAM 2 (30-60s) + Railway cold start (60-90s) + depth estimation
         )
         logger.info(f"   → Detected: {len(vision_result.detected_foods)} foods")
 

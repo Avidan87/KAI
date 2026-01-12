@@ -272,7 +272,10 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                     img_array = np.array(Image.open(io.BytesIO(response.content)))
 
                 # Use SAM 2 for pixel-perfect food segmentation
-                use_sam = len(detected_foods) >= 1 and img_array is not None
+                # OPTIMIZATION: Use SAM 2 for 2+ foods (skip for single dishes)
+                # Single dishes don't need segmentation (portion = whole plate)
+                # 2+ foods benefit from accurate segmentation (different portion sizes)
+                use_sam = len(detected_foods) >= 2 and img_array is not None
 
                 if use_sam:
                     try:

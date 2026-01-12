@@ -147,12 +147,14 @@ class SAMFoodSegmenter:
             from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
             # Create automatic mask generator
+            # CPU-optimized settings: points_per_side=12 → 144 points (vs 32²=1024)
+            # This reduces processing time from 5-10min to 30-60sec on CPU
             mask_generator = SAM2AutomaticMaskGenerator(
                 self.model,
-                points_per_side=32,  # Grid density (higher = more masks, slower)
-                pred_iou_thresh=0.86,  # Quality threshold
-                stability_score_thresh=0.92,  # Stability threshold
-                crop_n_layers=1,
+                points_per_side=12,  # CPU-optimized: 12²=144 points (was 32²=1024)
+                pred_iou_thresh=0.80,  # Slightly lower threshold for better recall
+                stability_score_thresh=0.88,  # Slightly lower for better recall
+                crop_n_layers=0,  # Disable cropping for speed (was 1)
                 crop_n_points_downscale_factor=2,
                 min_mask_region_area=500,  # Filter small noise (pixels)
             )

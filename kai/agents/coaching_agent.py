@@ -353,6 +353,65 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         return f"- {nutrient_name}: {actual_value:.1f}{unit} ({display_pct:.0f}% of daily {rdv_value:.1f}{unit}){badge_text}"
 
+    def _format_daily_progress_with_meal(
+        self,
+        nutrient_name: str,
+        meal_value: float,
+        daily_totals: Optional[Dict[str, float]],
+        rdv_value: float,
+        unit: str
+    ) -> str:
+        """
+        Format daily progress showing cumulative totals + current meal.
+
+        Args:
+            nutrient_name: Display name (e.g., "Protein")
+            meal_value: Amount in current meal
+            daily_totals: Dict with daily totals (or None if not available)
+            rdv_value: RDV target
+            unit: Unit string (e.g., "g", "mg", "mcg")
+
+        Returns:
+            Formatted string showing: "This meal: Xg | Today so far: Yg (Z% of daily goal)"
+        """
+        # Map nutrient names to daily_totals keys
+        nutrient_key_map = {
+            "Calories": "calories",
+            "Protein": "protein",
+            "Carbs": "carbohydrates",
+            "Fat": "fat",
+            "Iron": "iron",
+            "Calcium": "calcium",
+            "Vitamin A": "vitamin_a",
+            "Zinc": "zinc"
+        }
+
+        nutrient_key = nutrient_key_map.get(nutrient_name, nutrient_name.lower())
+
+        # Get today's total (including this meal)
+        if daily_totals and nutrient_key in daily_totals:
+            # daily_totals includes previous meals, add current meal
+            today_total = daily_totals.get(nutrient_key, 0) + meal_value
+        else:
+            # No daily_totals available, assume this is the only meal
+            today_total = meal_value
+
+        # Calculate percentage
+        today_pct = (today_total / rdv_value * 100) if rdv_value > 0 else 0
+        remaining = max(0, rdv_value - today_total)
+
+        # Format based on progress
+        if today_pct >= 100:
+            status = "✅ DAILY GOAL MET!"
+        elif today_pct >= 75:
+            status = f"({remaining:.1f}{unit} remaining)"
+        elif today_pct >= 50:
+            status = f"({remaining:.1f}{unit} more needed)"
+        else:
+            status = f"({remaining:.1f}{unit} more needed - needs attention)"
+
+        return f"- {nutrient_name}: This meal {meal_value:.1f}{unit} | TODAY SO FAR: {today_total:.1f}{unit} ({today_pct:.0f}% of {rdv_value:.1f}{unit} daily goal) {status}"
+
     async def provide_coaching(
         self,
         user_id: str,
@@ -440,6 +499,9 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 }
                 user_rdv = calculate_user_rdv(user_profile)
                 logger.info(f"⚠️  Using basic RDV (incomplete profile). Recommend user completes health profile.")
+
+            # Extract daily_totals from user_context (passed from orchestrator)
+            daily_totals = user_context.get("daily_totals") if user_context else None
 
             # Detect learning phase
             is_learning_phase = not user_stats.get("learning_phase_complete", False)
@@ -603,6 +665,13 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         user_name = user_context.get("user_name") if user_context else None
         logger.info(f"   User name: {user_name or 'Not provided'}")
 
+        # Extract daily_totals from user_context (passed from orchestrator)
+        daily_totals = user_context.get("daily_totals") if user_context else None
+        if daily_totals:
+            logger.info(f"   Daily totals available: {list(daily_totals.keys())}")
+        else:
+            logger.info(f"   Daily totals: Not available (showing meal-only nutrition)")
+
         # Build context for GPT-4o
         foods_eaten = [food.name for food in knowledge_result.foods]
         if not foods_eaten and user_context is not None and 'vision_foods' in user_context:
@@ -661,7 +730,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             meal_size=meal_size,
             size_emoji=size_emoji,
             user_health_goals=user_health_goals,  # NEW: Pass health goals to prompt
-            user_name=user_name  # NEW: Pass user name for personalization
+            user_name=user_name,  # NEW: Pass user name for personalization
+            daily_totals=daily_totals  # NEW: Pass daily totals for cumulative progress
         )
 
         # Call GPT-4o for dynamic coaching
@@ -701,7 +771,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         self,
         primary_gap: str,
         user_health_goals: Optional[str] = None,
-        top_k: int = 15
+        top_k: int = 20  # Increased from 15 to 20 for more variety
     ) -> List[Dict[str, Any]]:
         """
         Query ChromaDB for Nigerian foods relevant to user's primary nutrient gap.
@@ -719,25 +789,65 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             return []
 
         try:
+            import random
+
             # Build semantic search query based on nutrient gap
+            # Add slight variations to queries to get more diverse results
             nutrient_queries = {
-                "iron": "Nigerian foods high in iron: dark leafy greens, beans, liver, red meat, fish",
-                "protein": "Nigerian protein-rich foods: fish, chicken, beans, eggs, moin moin",
-                "calcium": "Nigerian calcium-rich foods: milk, sardines, okra, leafy greens",
-                "vitamin_a": "Nigerian vitamin A foods: yellow vegetables, plantain, palm oil, carrots",
-                "zinc": "Nigerian zinc-rich foods: meat, fish, beans, nuts, whole grains",
-                "carbohydrates": "Nigerian energy foods: rice, yam, plantain, garri, fufu",
-                "fat": "Nigerian healthy fats: palm oil, groundnuts, avocado, fish",
-                "calories": "Nigerian high-calorie foods for weight gain" if user_health_goals and "gain" in user_health_goals.lower()
-                            else "Nigerian balanced meals"
+                "iron": [
+                    "Nigerian foods high in iron: dark leafy greens, beans, liver, red meat, fish",
+                    "Iron-rich Nigerian meals: vegetables, legumes, seafood, meat",
+                    "Nigerian soups and dishes with high iron content"
+                ],
+                "protein": [
+                    "Nigerian protein-rich foods: fish, chicken, beans, eggs, moin moin",
+                    "High-protein Nigerian meals: meat, seafood, legumes",
+                    "Nigerian dishes with excellent protein content"
+                ],
+                "calcium": [
+                    "Nigerian calcium-rich foods: milk, sardines, okra, leafy greens",
+                    "Calcium sources in Nigerian cuisine: dairy, fish, vegetables",
+                    "Nigerian meals for strong bones: calcium-rich options"
+                ],
+                "vitamin_a": [
+                    "Nigerian vitamin A foods: yellow vegetables, plantain, palm oil, carrots",
+                    "Nigerian foods for eye health: vitamin A rich options",
+                    "Orange and green Nigerian vegetables and fruits"
+                ],
+                "zinc": [
+                    "Nigerian zinc-rich foods: meat, fish, beans, nuts, whole grains",
+                    "Nigerian meals with high zinc: seafood, legumes, nuts",
+                    "Immune-boosting Nigerian foods with zinc"
+                ],
+                "carbohydrates": [
+                    "Nigerian energy foods: rice, yam, plantain, garri, fufu",
+                    "Nigerian swallows and staples: carb-rich options",
+                    "Nigerian meals for energy: carbohydrate sources"
+                ],
+                "fat": [
+                    "Nigerian healthy fats: palm oil, groundnuts, avocado, fish",
+                    "Nigerian meals with good fats: oils, nuts, fish",
+                    "Healthy fat sources in Nigerian cuisine"
+                ],
+                "calories": [
+                    "Nigerian high-calorie foods for weight gain" if user_health_goals and "gain" in user_health_goals.lower()
+                    else "Nigerian balanced meals",
+                    "Nutrient-dense Nigerian dishes",
+                    "Wholesome Nigerian meal options"
+                ]
             }
 
-            query = nutrient_queries.get(primary_gap.lower(), f"Nigerian foods rich in {primary_gap}")
+            # Select a random query variation for more diversity
+            queries = nutrient_queries.get(primary_gap.lower(), [f"Nigerian foods rich in {primary_gap}"])
+            if isinstance(queries, list):
+                query = random.choice(queries)
+            else:
+                query = queries
 
             # Search ChromaDB
             results = self.vector_db.search(query, n_results=top_k)
 
-            logger.info(f"   → Retrieved {len(results)} foods from ChromaDB for {primary_gap} gap")
+            logger.info(f"   → Retrieved {len(results)} foods from ChromaDB for {primary_gap} gap (query variation used)")
             return results
 
         except Exception as e:
@@ -811,7 +921,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             description = ", ".join(highlights) if highlights else "balanced nutrition"
             formatted_list.append(f"- {name}: {description.capitalize()}")
 
-        return "\n".join(formatted_list[:12])  # Limit to 12 foods for prompt size
+        return "\n".join(formatted_list[:18])  # Increased from 12 to 18 foods for more variety
 
     def _build_dynamic_coaching_prompt(
         self,
@@ -837,7 +947,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         meal_size: str = "MODERATE MEAL",
         size_emoji: str = "🍽️",
         user_health_goals: Optional[str] = None,
-        user_name: Optional[str] = None
+        user_name: Optional[str] = None,
+        daily_totals: Optional[Dict[str, float]] = None
     ) -> str:
         """Build dynamic system prompt for GPT-4o coaching generation.
 
@@ -955,35 +1066,35 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
 **Current Meal Context:**
 - Meal Type: {meal_type.upper()}
-- Meal Size: {meal_size} {size_emoji} ({knowledge_result.total_calories:.0f} kcal = {(knowledge_result.total_calories/user_rdv.get('calories',2500)*100):.0f}% of daily needs)
-- Calories Remaining Today: ~{user_rdv.get('calories',2500) - knowledge_result.total_calories:.0f} kcal for remaining meals
+- Meal Size: {meal_size} {size_emoji} ({knowledge_result.total_calories:.0f} kcal)
 
-**Current Meal Nutrition (NORMALIZED TO 100% SCALE):**
-All percentages are capped at 100% to avoid confusion. If a nutrient shows 100%, it may have EXCEEDED daily needs (good for this ONE meal).
+**DAILY PROGRESS (So Far Today):**
+CRITICAL: The percentages below show CUMULATIVE DAILY PROGRESS, not just this single meal!
+Use this to give context like "You've had X so far today (Y% of your goal)".
 
-{self._format_nutrient_with_normalization(
-    "Calories", knowledge_result.total_calories, user_rdv.get('calories', 2500), "kcal"
+{self._format_daily_progress_with_meal(
+    "Calories", knowledge_result.total_calories, daily_totals, user_rdv.get('calories', 2500), "kcal"
 )}
-{self._format_nutrient_with_normalization(
-    "Protein", knowledge_result.total_protein, user_rdv.get('protein', 60), "g"
+{self._format_daily_progress_with_meal(
+    "Protein", knowledge_result.total_protein, daily_totals, user_rdv.get('protein', 60), "g"
 )}
-{self._format_nutrient_with_normalization(
-    "Carbs", knowledge_result.total_carbohydrates, user_rdv.get('carbs', 325), "g"
+{self._format_daily_progress_with_meal(
+    "Carbs", knowledge_result.total_carbohydrates, daily_totals, user_rdv.get('carbs', 325), "g"
 )}
-{self._format_nutrient_with_normalization(
-    "Fat", knowledge_result.total_fat, user_rdv.get('fat', 70), "g"
+{self._format_daily_progress_with_meal(
+    "Fat", knowledge_result.total_fat, daily_totals, user_rdv.get('fat', 70), "g"
 )}
-{self._format_nutrient_with_normalization(
-    "Iron", knowledge_result.total_iron, user_rdv.get('iron', 18), "mg"
+{self._format_daily_progress_with_meal(
+    "Iron", knowledge_result.total_iron, daily_totals, user_rdv.get('iron', 18), "mg"
 )}
-{self._format_nutrient_with_normalization(
-    "Calcium", knowledge_result.total_calcium, user_rdv.get('calcium', 1000), "mg"
+{self._format_daily_progress_with_meal(
+    "Calcium", knowledge_result.total_calcium, daily_totals, user_rdv.get('calcium', 1000), "mg"
 )}
-{self._format_nutrient_with_normalization(
-    "Vitamin A", knowledge_result.total_vitamin_a, user_rdv.get('vitamin_a', 800), "mcg"
+{self._format_daily_progress_with_meal(
+    "Vitamin A", knowledge_result.total_vitamin_a, daily_totals, user_rdv.get('vitamin_a', 800), "mcg"
 )}
-{self._format_nutrient_with_normalization(
-    "Zinc", knowledge_result.total_zinc, user_rdv.get('zinc', 8), "mg"
+{self._format_daily_progress_with_meal(
+    "Zinc", knowledge_result.total_zinc, daily_totals, user_rdv.get('zinc', 8), "mg"
 )}
 
 **Meal Quality Assessment:**
@@ -1037,10 +1148,21 @@ Foods available (dynamically retrieved based on nutrient needs):
 5. Respect health goal{' - WEIGHT LOSS: suggest lighter combos, skip or reduce swallow' if user_health_goals and 'lose' in user_health_goals.lower() else ''}
 6. Use qualitative nutrient descriptions (rich in iron, good protein, etc.)
 
-Example combos:
-- "Ugu soup + Grilled fish + small Eba" - rich in iron and protein
-- "Efo riro + Fish - skip swallow" - rich in iron and protein, low calorie (weight loss friendly)
-- "Jollof Rice + Grilled chicken" - good protein and energy
+**CRITICAL: BE CREATIVE AND VARY YOUR SUGGESTIONS!**
+- DO NOT repeat the same meal combo every time
+- Use the FULL knowledge base above (up to 18 foods available!)
+- Mix and match different soups, proteins, and sides creatively
+- Consider what user frequently eats (from food frequency data) and suggest VARIETY
+- Examples are just inspiration - CREATE UNIQUE COMBOS from the knowledge base!
+- The knowledge base changes with each query, giving you fresh options to work with
+
+Example combo formats (VARY THESE, don't copy verbatim!):
+- Soup + Protein + Optional Swallow: "Ugu soup + Grilled fish + small Eba"
+- Soup + Protein (no swallow): "Efo riro + Fish - skip swallow"
+- Rice/Grain + Protein: "Jollof Rice + Grilled chicken"
+- Stew + Protein + Swallow: "Egusi soup + Beef + medium Fufu"
+- Beans-based: "Moin Moin + Plantain + Fish"
+- Vegetable-heavy: "Okra soup + Catfish + small Garri"
 
 **Your Task:**
 Generate a CONCISE, HONEST JSON response with ONLY these fields:
@@ -1054,17 +1176,23 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
                 Celebrate streaks when current_streak >= 3.
                 Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ vitamin A, ⚡ calories, 🔥 streaks.
 
-                **CRITICAL NUTRIENT RULES:**
-                - Protein >= 40% RDV: NEVER say 'low protein'. Say 'great protein 💪' or 'excellent protein 💪'
-                - Iron >= 40% RDV: NEVER say 'low iron'. Say 'great iron 🩸' or 'excellent iron 🩸'
-                - Calcium >= 40% RDV: NEVER say 'low calcium'. Say 'great calcium 🦴' or 'excellent calcium 🦴'
-                - Vitamin A >= 40% RDV: NEVER say 'low vitamin A'. Say 'great vitamin A 👁️' or 'excellent vitamin A 👁️'
-                - Zinc >= 40% RDV: NEVER say 'low zinc'. Say 'great zinc' or 'good zinc'
-                - Only flag nutrients as 'low' if they are < 20% RDV
-                - Examples:
-                  * 29g protein (48% RDV) = 'Great protein! 💪' NOT 'low in protein'
-                  * 8mg iron (44% RDV for women) = 'Great iron! 🩸' NOT 'low in iron'
-                  * 450mg calcium (45% RDV) = 'Great calcium! 🦴' NOT 'low in calcium'
+                **CRITICAL NUTRIENT RULES (BASED ON DAILY PROGRESS):**
+                IMPORTANT: The percentages shown in 'DAILY PROGRESS' section are CUMULATIVE DAILY TOTALS (not just this meal!).
+                Use them to give context about overall daily nutrition, not to judge the single meal.
+
+                **ALWAYS reference the cumulative daily totals (from 'TODAY SO FAR' field) in your feedback, NOT just the current meal values!**
+
+                - Daily protein >= 70%: Say "You're doing great on protein today! 💪"
+                - Daily protein 40-69%: Say "Good protein progress today 💪, keep it up!"
+                - Daily protein < 40%: Say "Let's boost protein for your remaining meals 💪"
+                - Same logic applies to iron 🩸, calcium 🦴, vitamin A 👁️, zinc
+                - Only flag nutrients as 'low' if DAILY total is < 40% RDV
+
+                Examples (using DAILY cumulative totals from 'TODAY SO FAR'):
+                  * "You've had 42g protein today (70% of goal) - excellent progress! 💪"
+                  * "You're at 8mg iron so far (44% of goal) - great! 🩸 One more meal and you'll hit your target"
+                  * "Only 15g protein today (25% of goal) - add more protein to your next meal 💪"
+                  * For CALORIES: "You're at 1650/2500 kcal today (66%) - you have 850 kcal remaining for your next meal"
 
                 Examples:
                 - GOOD meal WITH STREAK: '{user_name or "Great job"}, {current_streak}-day streak! 🔥 Your Egusi soup with fish was excellent! Great protein 💪 and iron 🩸. You have ~1050 kcal left for dinner.'
@@ -1073,22 +1201,42 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
                 - OKAY meal: 'Your Eba with vegetable soup was decent. Good carbs but low protein. Add fish or chicken next time for balance.'",
 
     "next_meal_combo": {{
-        "combo": "ONE specific Nigerian meal combo. Format: 'Main dish + Protein ± Side'.
+        "combo": "ONE specific Nigerian meal combo selected from the knowledge base above.
+                  Format: 'Main dish + Protein ± Side'.
                   NO portion sizes in grams! Just describe portions qualitatively (small/medium/large).
-                  Example: 'Ugu soup + Grilled fish + small Eba' OR 'Efo riro + Fish - skip swallow' (for weight loss)",
+
+                  **IMPORTANT: CREATE VARIETY!**
+                  - Use different foods from the 18 options in the knowledge base
+                  - Don't suggest the same combos repeatedly
+                  - Mix and match creatively based on user's nutrient needs
+                  - Consider user's frequently eaten foods and suggest complementary options
+                  - The knowledge base is dynamically generated, so you have fresh foods to choose from each time
+
+                  Examples (CREATE YOUR OWN, don't copy these):
+                  - 'Ugu soup + Grilled fish + small Eba'
+                  - 'Egusi soup + Beef + medium Fufu'
+                  - 'Okra soup + Catfish - skip swallow'
+                  - 'Jollof Rice + Grilled chicken'
+                  - 'Moin Moin + Fried plantain + Fish'",
 
         "why": "One sentence explaining how this combo closes {primary_gap} gap and fits {user_health_goals or 'goal'}.
                 Use qualitative language - NO specific grams/mg.
-                Example: 'Low calorie, rich in iron and protein while keeping you within daily target'"
+                Focus on the PRIMARY nutrient this combo provides.
+                Example: 'Rich in iron and protein while keeping calories low for your weight loss goal'"
     }},
 
     "goal_progress": {{
         "type": "{user_health_goals or 'general_wellness'}",  // User's actual health goal
         "status": "excellent | on_track | needs_attention",  // Honest assessment
-        "message": "One sentence about progress toward goal. Use kcal when relevant for weight goals.
+        "message": "One sentence about progress toward goal.
+
+                    **CRITICAL: Use the CUMULATIVE DAILY TOTALS from 'DAILY PROGRESS' section above, NOT just this single meal!**
+
+                    For weight goals, show: '[cumulative daily kcal] / [target kcal] kcal today'
+
                     Examples:
                     - Weight loss: 'You're at 1650/1800 kcal today - only 150 left for dinner. Stay disciplined!'
-                    - Muscle gain: 'Great protein today! One more high-protein meal and you'll hit your target.'
+                    - Muscle gain: 'Great protein today! You're at 85g/120g. One more high-protein meal and you'll hit your target.'
                     - General wellness: 'Good balance today. Your iron and protein levels are looking solid!'"
     }}
 }}
@@ -1106,9 +1254,10 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
 1. MUST suggest ONE complete Nigerian meal combo (not individual foods)
 2. Combo MUST target user's TOP nutrient gap: {primary_gap}
 3. Combo MUST fit user's health goal{' (WEIGHT LOSS: keep under 600 cal, prioritize protein)' if user_health_goals and 'lose' in user_health_goals.lower() else ''}
-4. Use foods from knowledge base (Ugu soup, Efo riro, Egusi, Jollof, Eba, Fish, Chicken, Moin Moin, Plantain, Beans)
-5. Include realistic portion sizes and calculate total nutrients accurately
-6. Format: "Food 1 (portion) + Food 2 (portion) = X nutrients"
+4. **CRITICAL: Use DIFFERENT foods from the 18 options in the knowledge base above - CREATE VARIETY!**
+5. Mix and match creatively: Don't suggest "Efo riro + Fish" every time!
+6. Use qualitative portions (small/medium/large) - NO grams!
+7. The knowledge base varies each time, so explore the full list and be creative!
 
 **GOAL PROGRESS REQUIREMENTS:**
 1. Must reference user's ACTUAL health goal from profile
