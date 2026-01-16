@@ -9,9 +9,6 @@ Auth:
 Food Logging:
 - POST /api/v1/food-logging-upload      # Full pipeline: Vision → Knowledge → Coaching (FILE UPLOAD)
 
-Chat:
-- POST /api/v1/chat                     # Chat with Coaching Agent
-
 Meals:
 - POST /api/v1/meals/log                # Save meal to database
 - GET  /api/v1/meals/history            # Get meal history (user_id from JWT)
@@ -37,8 +34,6 @@ logger = logging.getLogger(__name__)
 
 from kai.models.agent_models import (
     FoodLoggingResponse,
-    ChatRequest,
-    ChatResponse,
     KnowledgeResult,
     LogMealRequest,
     LogMealResponse,
@@ -235,73 +230,6 @@ async def food_logging_upload(
         error_traceback = traceback.format_exc()
         logger.error(f"❌ Food logging upload failed: {str(e)}\n{error_traceback}")
         raise HTTPException(status_code=500, detail=f"Food logging failed: {str(e)}")
-
-
-# ============================================================================
-# Chat Endpoints
-# ============================================================================
-
-@app.post("/api/v1/chat", response_model=ChatResponse)
-async def chat(
-    request: ChatRequest,
-    user_id: str = Depends(get_current_user_id),  # Extract from JWT token
-):
-    """Chat with Coaching Agent"""
-    start = time.time()
-    try:
-        result = await handle_user_request(
-            user_message=request.message,
-            image_base64=None,
-            image_url=None,
-            user_id=user_id,  # Use JWT user_id instead of request.user_id
-            conversation_history=request.conversation_history,
-        )
-
-        coaching = result.get("coaching")
-        knowledge = result.get("nutrition")
-
-        # Extract coaching message and suggestions from new format
-        if coaching:
-            message = getattr(coaching, "message", "")
-            # Build suggestions from next_meal_combo and goal_progress
-            suggestions = []
-            next_meal_combo = getattr(coaching, "next_meal_combo", None)
-            if next_meal_combo:
-                combo_text = f"{next_meal_combo.combo} - {next_meal_combo.why}"
-                suggestions.append(combo_text)
-            goal_progress = getattr(coaching, "goal_progress", None)
-            if goal_progress and goal_progress.message:
-                suggestions.append(goal_progress.message)
-        else:
-            message = ""
-            suggestions = []
-
-        # Get sources from knowledge result if available
-        sources = []
-        if knowledge:
-            sources = getattr(knowledge, "sources_used", [])
-
-        # Get Tavily sources from orchestrator result and merge with knowledge sources
-        tavily_sources = result.get("tavily_sources", [])
-        if tavily_sources:
-            sources = sources + tavily_sources  # Merge both source lists
-
-        # Get tavily_used flag from orchestrator result
-        tavily_used = result.get("tavily_used", False)
-
-        return ChatResponse(
-            success=True,
-            message=message,
-            nutrition_data=knowledge,  # ✅ Include full nutrition data!
-            coaching=coaching,  # ✅ Include full coaching data!
-            sources=sources,  # ✅ Include sources!
-            follow_up_suggestions=suggestions,
-            processing_time_ms=int((time.time() - start) * 1000),
-            workflow_path=result.get("workflow", "general_chat"),  # ✅ Show workflow!
-            tavily_used=tavily_used,  # ✅ Track if Tavily was used!
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================

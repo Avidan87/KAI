@@ -12,12 +12,6 @@ from pydantic import BaseModel, Field, ConfigDict
 # Request Models
 # ============================================================================
 
-class ChatRequest(BaseModel):
-    """General chat/query request (user_id extracted from JWT token)"""
-    message: str
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
-
-
 class NutritionQueryRequest(BaseModel):
     """Specific nutrition information query"""
     user_id: str
@@ -181,19 +175,6 @@ class FoodLoggingResponse(BaseModel):
     total_zinc: float = 0.0
     processing_time_ms: int = 0
     workflow_path: str = ""
-
-
-class ChatResponse(BaseModel):
-    """Response for general chat/query"""
-    success: bool
-    message: str
-    nutrition_data: Optional[KnowledgeResult] = None  # Include nutrition if query was about food
-    coaching: Optional[CoachingResult] = None  # Include full coaching data
-    sources: List[str] = Field(default_factory=list)
-    follow_up_suggestions: List[str] = Field(default_factory=list)
-    processing_time_ms: int = 0
-    workflow_path: str = ""  # Show which workflow was used
-    tavily_used: bool = False  # Track if Tavily web research was used
 
 
 # ============================================================================
