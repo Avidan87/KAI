@@ -57,7 +57,7 @@ async def run_migration(db_path: Path = None) -> None:
                 week1_avg_fat REAL DEFAULT 0,
                 week1_avg_iron REAL DEFAULT 0,
                 week1_avg_calcium REAL DEFAULT 0,
-                week1_avg_vitamin_a REAL DEFAULT 0,
+                week1_avg_potassium REAL DEFAULT 0,
                 week1_avg_zinc REAL DEFAULT 0,
 
                 -- Week 2 Averages (8-14 days ago, for comparison)
@@ -67,7 +67,7 @@ async def run_migration(db_path: Path = None) -> None:
                 week2_avg_fat REAL DEFAULT 0,
                 week2_avg_iron REAL DEFAULT 0,
                 week2_avg_calcium REAL DEFAULT 0,
-                week2_avg_vitamin_a REAL DEFAULT 0,
+                week2_avg_potassium REAL DEFAULT 0,
                 week2_avg_zinc REAL DEFAULT 0,
 
                 -- Nutrient Trends (improving, declining, stable)
@@ -77,7 +77,7 @@ async def run_migration(db_path: Path = None) -> None:
                 fat_trend TEXT DEFAULT 'stable',
                 iron_trend TEXT DEFAULT 'stable',
                 calcium_trend TEXT DEFAULT 'stable',
-                vitamin_a_trend TEXT DEFAULT 'stable',
+                potassium_trend TEXT DEFAULT 'stable',
                 zinc_trend TEXT DEFAULT 'stable',
 
                 -- Last Calculated

@@ -108,7 +108,7 @@ class KnowledgeAgent:
                         "properties": {
                             "nutrient": {
                                 "type": "string",
-                                "enum": ["protein", "iron", "calcium", "vitamin_a"],
+                                "enum": ["protein", "iron", "calcium", "potassium"],
                                 "description": "Nutrient to search for"
                             },
                             "min_value": {
@@ -236,7 +236,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
         total_fat = 0.0
         total_iron = 0.0
         total_calcium = 0.0
-        total_vitamin_a = 0.0
+        total_potassium = 0.0
         total_zinc = 0.0
 
         async def search_one(food_name: str, portion_g: float):
@@ -269,7 +269,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
                 "fat": metadata.get("fat", 0),
                 "iron": metadata.get("iron", 0),
                 "calcium": metadata.get("calcium", 0),
-                "vitamin_a": metadata.get("vitamin_a", 0),
+                "potassium": metadata.get("potassium", 0),
                 "zinc": metadata.get("zinc", 0)
             }
 
@@ -285,7 +285,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
             total_fat += total_nutrients["fat"]
             total_iron += total_nutrients["iron"]
             total_calcium += total_nutrients["calcium"]
-            total_vitamin_a += total_nutrients["vitamin_a"]
+            total_potassium += total_nutrients["potassium"]
             total_zinc += total_nutrients["zinc"]
 
             dietary_flags_str = metadata.get("dietary_flags", "")
@@ -326,7 +326,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
             "total_fat": total_fat,
             "total_iron": total_iron,
             "total_calcium": total_calcium,
-            "total_vitamin_a": total_vitamin_a,
+            "total_potassium": total_potassium,
             "total_zinc": total_zinc,
             "query_interpretation": f"Retrieved {len(foods_data)}/{len(food_names)} foods",
             "sources_used": ["ChromaDB Nigerian Foods Collection"]
@@ -339,7 +339,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
             f"{total_fat:.1f}g fat | "
             f"{total_iron:.1f}mg iron | "
             f"{total_calcium:.1f}mg calcium | "
-            f"{total_vitamin_a:.1f}mcg vitamin A | "
+            f"{total_potassium:.1f}mg potassium | "
             f"{total_zinc:.1f}mg zinc"
         )
 
@@ -355,7 +355,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
         Tool function for finding foods high in a specific nutrient.
 
         Args:
-            nutrient: Nutrient name (protein, iron, calcium, vitamin_a)
+            nutrient: Nutrient name (protein, iron, calcium, potassium)
             min_value: Minimum value per 100g
             max_results: Maximum results to return
 
@@ -432,7 +432,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
             total_fat=result_dict.get("total_fat", 0.0),
             total_iron=result_dict.get("total_iron", 0.0),
             total_calcium=result_dict.get("total_calcium", 0.0),
-            total_vitamin_a=result_dict.get("total_vitamin_a", 0.0),
+            total_potassium=result_dict.get("total_potassium", 0.0),
             total_zinc=result_dict.get("total_zinc", 0.0),
             query_interpretation=result_dict.get("query_interpretation", ""),
             sources_used=result_dict.get("sources_used", [])

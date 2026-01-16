@@ -171,13 +171,13 @@ def _calculate_weekly_averages(
     if not period_meals:
         return {
             "calories": 0, "protein": 0, "carbs": 0, "fat": 0,
-            "iron": 0, "calcium": 0, "vitamin_a": 0, "zinc": 0
+            "iron": 0, "calcium": 0, "potassium": 0, "zinc": 0
         }
 
     # Sum all nutrients from meal_foods (stored in foods field)
     totals = {
         "calories": 0, "protein": 0, "carbs": 0, "fat": 0,
-        "iron": 0, "calcium": 0, "vitamin_a": 0, "zinc": 0
+        "iron": 0, "calcium": 0, "potassium": 0, "zinc": 0
     }
 
     for meal in period_meals:
@@ -189,7 +189,7 @@ def _calculate_weekly_averages(
             totals["fat"] += food.get("fat", 0)
             totals["iron"] += food.get("iron", 0)
             totals["calcium"] += food.get("calcium", 0)
-            totals["vitamin_a"] += food.get("vitamin_a", 0)
+            totals["potassium"] += food.get("potassium", 0)
             totals["zinc"] += food.get("zinc", 0)
 
     # Calculate averages (per day)
@@ -218,7 +218,7 @@ def _calculate_trends(week1: Dict[str, float], week2: Dict[str, float]) -> Dict[
     """
     trends = {}
 
-    for nutrient in ["calories", "protein", "carbs", "fat", "iron", "calcium", "vitamin_a", "zinc"]:
+    for nutrient in ["calories", "protein", "carbs", "fat", "iron", "calcium", "potassium", "zinc"]:
         week1_val = week1.get(nutrient, 0)
         week2_val = week2.get(nutrient, 0)
 

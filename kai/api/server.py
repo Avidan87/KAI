@@ -208,7 +208,7 @@ async def food_logging_upload(
         total_fat = getattr(knowledge, "total_fat", 0.0) if knowledge else 0.0
         total_iron = getattr(knowledge, "total_iron", 0.0) if knowledge else 0.0
         total_calcium = getattr(knowledge, "total_calcium", 0.0) if knowledge else 0.0
-        total_vitamin_a = getattr(knowledge, "total_vitamin_a", 0.0) if knowledge else 0.0
+        total_potassium = getattr(knowledge, "total_potassium", 0.0) if knowledge else 0.0
         total_zinc = getattr(knowledge, "total_zinc", 0.0) if knowledge else 0.0
 
         return FoodLoggingResponse(
@@ -225,7 +225,7 @@ async def food_logging_upload(
             total_fat=total_fat,
             total_iron=total_iron,
             total_calcium=total_calcium,
-            total_vitamin_a=total_vitamin_a,
+            total_potassium=total_potassium,
             total_zinc=total_zinc,
             processing_time_ms=int((time.time() - start) * 1000),
             workflow_path=result.get("workflow", "food_logging"),

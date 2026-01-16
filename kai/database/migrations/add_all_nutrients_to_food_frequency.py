@@ -1,7 +1,7 @@
 """
 Database Migration: Add All Nutrients to Food Frequency Table
 
-Adds carbs, fat, calcium, vitamin_a, zinc columns to user_food_frequency table.
+Adds carbs, fat, calcium, potassium, zinc columns to user_food_frequency table.
 
 Previously only tracked: iron, protein, calories
 Now tracks: ALL 8 nutrients
@@ -55,11 +55,11 @@ async def run_migration(db_path: Path = None) -> None:
         try:
             await db.execute("""
                 ALTER TABLE user_food_frequency
-                ADD COLUMN avg_vitamin_a_per_serving REAL DEFAULT 0
+                ADD COLUMN avg_potassium_per_serving REAL DEFAULT 0
             """)
-            logger.info("✓ Added avg_vitamin_a_per_serving")
+            logger.info("✓ Added avg_potassium_per_serving")
         except Exception as e:
-            logger.warning(f"Column avg_vitamin_a_per_serving may already exist: {e}")
+            logger.warning(f"Column avg_potassium_per_serving may already exist: {e}")
 
         try:
             await db.execute("""

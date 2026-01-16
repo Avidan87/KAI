@@ -156,7 +156,7 @@ Your mission is to provide culturally-aware, empathetic nutrition guidance that 
 
 **Your Expertise:**
 - Nigerian food culture and traditional dishes
-- Multi-nutrient analysis (calories, protein, carbs, fat, iron, calcium, vitamin A, zinc)
+- Multi-nutrient analysis (calories, protein, carbs, fat, iron, calcium,potassium, zinc)
 - Learning phase coaching (observational for first 7 days/21 meals)
 - Progressive coaching based on week-over-week trends
 - Motivational coaching with cultural sensitivity
@@ -190,7 +190,7 @@ Your mission is to provide culturally-aware, empathetic nutrition guidance that 
 - Fat: Hormone production and nutrient absorption
 - Iron: Prevents anemia, supports oxygen transport
 - Calcium: Strong bones and teeth
-- Vitamin A: Immune system and vision
+- Potassium: Heart health, blood pressure regulation, and muscle function
 - Zinc: Immune function and wound healing
 
 **Your Tone:**
@@ -218,15 +218,52 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         logger.info(f"✓ Coaching Agent initialized with {len(tools)} tool(s)")
 
+    def _is_first_meal_of_day(
+        self,
+        knowledge_result: KnowledgeResult,
+        daily_totals: Optional[Dict[str, float]]
+    ) -> bool:
+        """
+        Determine if this is the first meal logged today.
+
+        Used to decide whether to celebrate streak (only on first meal of the day).
+
+        Args:
+            knowledge_result: Current meal nutrition data
+            daily_totals: Cumulative daily totals (or None if not available)
+
+        Returns:
+            True if this is the first meal of the day, False otherwise
+        """
+        if not daily_totals:
+            # No daily totals means this is definitely the first meal
+            return True
+
+        # Check if daily calories are very close to this meal's calories
+        # If daily_total ≈ meal_value, then this is the first meal
+        daily_calories = daily_totals.get("calories", 0)
+        meal_calories = knowledge_result.total_calories
+
+        # Allow 10% tolerance for rounding
+        tolerance = meal_calories * 0.1
+        is_first = abs(daily_calories - meal_calories) <= tolerance
+
+        return is_first
+
     def _detect_meal_type(self, timestamp: Optional[datetime] = None) -> str:
         """
         Auto-detect meal type from timestamp.
 
-        Nigerian meal timing patterns:
-        - Breakfast: 6:00 AM - 10:30 AM
-        - Lunch: 11:00 AM - 3:00 PM
-        - Dinner: 5:00 PM - 10:00 PM
-        - Snack: Outside these windows
+        FIXED BUG #9: Improved thresholds to handle edge cases better.
+
+        Nigerian meal timing patterns (updated for better edge case handling):
+        - Breakfast: 5:00 AM - 10:30 AM (extended start for early risers)
+        - Lunch: 11:00 AM - 3:30 PM (extended end for late lunchers)
+        - Dinner: 4:00 PM - 10:00 PM (extended start for early dinner, common in Nigeria)
+        - Snack: Outside these windows (late night, very early morning)
+
+        Note: Users can always override by passing meal_type in user_context.
+        This auto-detection is a fallback for convenience.
 
         Args:
             timestamp: Meal logging timestamp (defaults to now)
@@ -239,13 +276,14 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         hour = timestamp.hour
 
-        if 6 <= hour < 11:
+        # More flexible thresholds to handle edge cases
+        if 5 <= hour < 11:  # Extended breakfast window (5 AM - 10:59 AM)
             return "breakfast"
-        elif 11 <= hour < 15:
+        elif 11 <= hour < 16:  # Extended lunch window (11 AM - 3:59 PM)
             return "lunch"
-        elif 17 <= hour < 22:
+        elif 16 <= hour < 22:  # Extended dinner window (4 PM - 9:59 PM)
             return "dinner"
-        else:
+        else:  # Late night (10 PM - 4:59 AM)
             return "snack"
 
     def _classify_meal_size(
@@ -341,7 +379,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             nutrient_name: Display name (e.g., "Protein")
             actual_value: Actual amount consumed
             rdv_value: RDV target
-            unit: Unit string (e.g., "g", "mg", "mcg")
+            unit: Unit string (e.g., "g", "mg", "mg")
 
         Returns:
             Formatted string with normalized percentage
@@ -369,7 +407,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             meal_value: Amount in current meal
             daily_totals: Dict with daily totals (or None if not available)
             rdv_value: RDV target
-            unit: Unit string (e.g., "g", "mg", "mcg")
+            unit: Unit string (e.g., "g", "mg", "mg")
 
         Returns:
             Formatted string showing: "This meal: Xg | Today so far: Yg (Z% of daily goal)"
@@ -382,18 +420,20 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             "Fat": "fat",
             "Iron": "iron",
             "Calcium": "calcium",
-            "Vitamin A": "vitamin_a",
+            "Potassium": "potassium",
             "Zinc": "zinc"
         }
 
         nutrient_key = nutrient_key_map.get(nutrient_name, nutrient_name.lower())
 
         # Get today's total (including this meal)
+        # CRITICAL FIX: daily_totals from orchestrator ALREADY includes the current meal!
+        # The database updates daily_nutrients AFTER logging the meal, so we should NOT add meal_value again.
         if daily_totals and nutrient_key in daily_totals:
-            # daily_totals includes previous meals, add current meal
-            today_total = daily_totals.get(nutrient_key, 0) + meal_value
+            # daily_totals ALREADY includes this meal (updated by database after meal logging)
+            today_total = daily_totals.get(nutrient_key, 0)
         else:
-            # No daily_totals available, assume this is the only meal
+            # No daily_totals available (first meal or database error), use only this meal
             today_total = meal_value
 
         # Calculate percentage
@@ -411,6 +451,91 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             status = f"({remaining:.1f}{unit} more needed - needs attention)"
 
         return f"- {nutrient_name}: This meal {meal_value:.1f}{unit} | TODAY SO FAR: {today_total:.1f}{unit} ({today_pct:.0f}% of {rdv_value:.1f}{unit} daily goal) {status}"
+
+    def _build_structured_daily_progress(
+        self,
+        knowledge_result: KnowledgeResult,
+        daily_totals: Optional[Dict[str, float]],
+        user_rdv: Dict[str, float]
+    ) -> str:
+        """
+        Build structured JSON data for daily nutrition progress.
+
+        This fixes Bug #4 by providing clean, parseable data instead of formatted strings.
+        GPT-4o can now reliably extract numbers for goal progress messages.
+
+        Args:
+            knowledge_result: Current meal nutrition data
+            daily_totals: Cumulative daily totals (or None if not available)
+            user_rdv: User's personalized RDV targets
+
+        Returns:
+            JSON string with structured nutrient data
+        """
+        # Map nutrient names to daily_totals keys
+        nutrient_key_map = {
+            "calories": "calories",
+            "protein": "protein",
+            "carbs": "carbohydrates",
+            "fat": "fat",
+            "iron": "iron",
+            "calcium": "calcium",
+            "potassium": "potassium",
+            "zinc": "zinc"
+        }
+
+        # Build structured data for each nutrient
+        structured_data = {}
+
+        nutrients = [
+            ("calories", knowledge_result.total_calories, user_rdv.get('calories', 2500), "kcal"),
+            ("protein", knowledge_result.total_protein, user_rdv.get('protein', 60), "g"),
+            ("carbs", knowledge_result.total_carbohydrates, user_rdv.get('carbs', 325), "g"),
+            ("fat", knowledge_result.total_fat, user_rdv.get('fat', 70), "g"),
+            ("iron", knowledge_result.total_iron, user_rdv.get('iron', 18), "mg"),
+            ("calcium", knowledge_result.total_calcium, user_rdv.get('calcium', 1000), "mg"),
+            ("potassium", knowledge_result.total_potassium, user_rdv.get('potassium', 800), "mg"),
+            ("zinc", knowledge_result.total_zinc, user_rdv.get('zinc', 8), "mg")
+        ]
+
+        for nutrient_key, meal_value, rdv_value, unit in nutrients:
+            # Get cumulative daily total
+            db_key = nutrient_key_map.get(nutrient_key, nutrient_key)
+            if daily_totals and db_key in daily_totals:
+                daily_total = daily_totals.get(db_key, 0)
+            else:
+                # No daily_totals available, use only this meal
+                daily_total = meal_value
+
+            # Calculate derived values
+            percent_of_target = (daily_total / rdv_value * 100) if rdv_value > 0 else 0
+            remaining = max(0, rdv_value - daily_total)
+
+            # Build structured entry
+            structured_data[nutrient_key] = {
+                "meal_value": round(meal_value, 1),
+                "daily_total": round(daily_total, 1),
+                "target": round(rdv_value, 1),
+                "remaining": round(remaining, 1),
+                "percent_of_target": round(percent_of_target, 0),
+                "unit": unit
+            }
+
+        # Format as clean JSON string
+        import json
+        json_str = json.dumps(structured_data, indent=2)
+
+        return f"""
+```json
+{json_str}
+```
+
+**HOW TO USE THIS DATA:**
+- Use "daily_total" for cumulative progress (e.g., "You're at {{calories.daily_total}}/{{calories.target}} kcal today")
+- Use "remaining" for what's left (e.g., "You have {{calories.remaining}} kcal remaining for dinner")
+- Use "percent_of_target" for percentage progress (e.g., "You're at {{protein.percent_of_target}}% of your protein goal")
+- DO NOT parse the formatted text below - use THIS structured data for all calculations!
+"""
 
     async def provide_coaching(
         self,
@@ -451,10 +576,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                     "current_logging_streak": 0,
                     "week1_avg_calories": 0, "week1_avg_protein": 0, "week1_avg_carbs": 0,
                     "week1_avg_fat": 0, "week1_avg_iron": 0, "week1_avg_calcium": 0,
-                    "week1_avg_vitamin_a": 0, "week1_avg_zinc": 0,
+                    "week1_avg_potassium": 0, "week1_avg_zinc": 0,
                     "calories_trend": "stable", "protein_trend": "stable", "carbs_trend": "stable",
                     "fat_trend": "stable", "iron_trend": "stable", "calcium_trend": "stable",
-                    "vitamin_a_trend": "stable", "zinc_trend": "stable",
+                    "potassium_trend": "stable", "zinc_trend": "stable",
                 }
                 food_frequency = []
             else:
@@ -465,40 +590,54 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             # Extract user health goals for goal-aligned coaching
             user_health_goals = user.get("health_goals") if user else None
 
-            # Calculate personalized RDV using NEW BMR/TDEE system if profile complete
-            # Check if user has complete health profile (weight, height, activity, goals)
-            has_complete_profile = all([
-                user.get("weight_kg"),
-                user.get("height_cm"),
-                user.get("activity_level"),
-                user.get("health_goals")
-            ])
+            # FIXED BUG #7: Always use v2 (BMR/TDEE) with sensible defaults for consistency
+            # This prevents jarring calorie target changes when user adds weight/height
+            from kai.utils.nutrition_rdv import calculate_user_rdv_v2
 
-            if has_complete_profile:
-                # Use NEW BMR/TDEE-based calculation (v2)
-                from kai.utils.nutrition_rdv import calculate_user_rdv_v2
-                try:
-                    rdv_result = calculate_user_rdv_v2(user)
-                    user_rdv = rdv_result["rdv"]
-                    logger.info(f"✓ Using BMR/TDEE-based RDV (complete profile): {user_rdv['calories']} kcal")
-                except Exception as e:
-                    logger.warning(f"Error calculating BMR/TDEE RDV: {e}. Falling back to basic RDV.")
-                    # Fall back to basic calculation
-                    user_profile = {
-                        "gender": user.get("gender", "female"),
-                        "age": user.get("age", 25),
-                        "activity_level": user.get("activity_level", "moderate")
-                    }
-                    user_rdv = calculate_user_rdv(user_profile)
-            else:
-                # Use OLD basic calculation (no weight/height)
+            # Provide sensible defaults for missing data
+            user_with_defaults = user.copy() if user else {}
+
+            # Apply defaults for missing fields
+            if not user_with_defaults.get("weight_kg"):
+                # Default weight based on gender and age
+                gender = user_with_defaults.get("gender", "female")
+                age = user_with_defaults.get("age", 25)
+                user_with_defaults["weight_kg"] = 65 if gender == "female" else 75  # Average Nigerian adult weight
+                logger.info(f"   ⚠️  Missing weight - using default: {user_with_defaults['weight_kg']}kg")
+
+            if not user_with_defaults.get("height_cm"):
+                # Default height based on gender
+                gender = user_with_defaults.get("gender", "female")
+                user_with_defaults["height_cm"] = 162 if gender == "female" else 170  # Average Nigerian adult height
+                logger.info(f"   ⚠️  Missing height - using default: {user_with_defaults['height_cm']}cm")
+
+            if not user_with_defaults.get("activity_level"):
+                user_with_defaults["activity_level"] = user_context.get("activity_level", "moderate")
+                logger.info(f"   ⚠️  Missing activity level - using default: {user_with_defaults['activity_level']}")
+
+            if not user_with_defaults.get("health_goals"):
+                user_with_defaults["health_goals"] = "maintain_weight"
+                logger.info(f"   ⚠️  Missing health goals - using default: {user_with_defaults['health_goals']}")
+
+            # Always use v2 for consistency
+            try:
+                rdv_result = calculate_user_rdv_v2(user_with_defaults)
+                user_rdv = rdv_result["rdv"]
+                using_defaults = not all([user.get("weight_kg"), user.get("height_cm")])
+                if using_defaults:
+                    logger.info(f"✓ Using BMR/TDEE RDV with defaults: {user_rdv['calories']} kcal (update profile for personalized targets)")
+                else:
+                    logger.info(f"✓ Using personalized BMR/TDEE RDV: {user_rdv['calories']} kcal")
+            except Exception as e:
+                logger.error(f"Error calculating BMR/TDEE RDV: {e}. Falling back to basic RDV.")
+                # Last resort fallback
                 user_profile = {
                     "gender": user.get("gender", "female"),
                     "age": user.get("age", 25),
-                    "activity_level": user_context.get("activity_level", user.get("activity_level", "moderate"))
+                    "activity_level": user.get("activity_level", "moderate")
                 }
                 user_rdv = calculate_user_rdv(user_profile)
-                logger.info(f"⚠️  Using basic RDV (incomplete profile). Recommend user completes health profile.")
+                logger.warning(f"⚠️  Using basic RDV fallback: {user_rdv['calories']} kcal")
 
             # Extract daily_totals from user_context (passed from orchestrator)
             daily_totals = user_context.get("daily_totals") if user_context else None
@@ -508,6 +647,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             total_meals = user_stats.get("total_meals_logged", 0)
             current_streak = user_stats.get("current_logging_streak", 0)
 
+            # FIX: Determine if this is the first meal of the day (for streak celebration)
+            # Streak should only be celebrated on the FIRST meal of the day, not every meal
+            is_first_meal_today = self._is_first_meal_of_day(knowledge_result, daily_totals)
+
             # Get week1 averages for gap analysis
             week1_averages = {
                 "calories": user_stats.get("week1_avg_calories", 0),
@@ -516,7 +659,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 "fat": user_stats.get("week1_avg_fat", 0),
                 "iron": user_stats.get("week1_avg_iron", 0),
                 "calcium": user_stats.get("week1_avg_calcium", 0),
-                "vitamin_a": user_stats.get("week1_avg_vitamin_a", 0),
+                "potassium": user_stats.get("week1_avg_potassium", 0),
                 "zinc": user_stats.get("week1_avg_zinc", 0),
             }
 
@@ -528,7 +671,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 "fat": user_stats.get("fat_trend", "stable"),
                 "iron": user_stats.get("iron_trend", "stable"),
                 "calcium": user_stats.get("calcium_trend", "stable"),
-                "vitamin_a": user_stats.get("vitamin_a_trend", "stable"),
+                "potassium": user_stats.get("potassium_trend", "stable"),
                 "zinc": user_stats.get("zinc_trend", "stable"),
             }
 
@@ -588,7 +731,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 user_context=user_context or {},
                 workflow_type=workflow_type,
                 tavily_context=tavily_context,  # Pass Tavily research to GPT-4o
-                user_health_goals=user_health_goals  # NEW: Pass health goals for goal-aligned coaching
+                user_health_goals=user_health_goals,  # NEW: Pass health goals for goal-aligned coaching
+                is_first_meal_today=is_first_meal_today  # FIX: Pass first meal flag for streak celebration
             )
 
             # Store Tavily sources in coaching_data for orchestrator
@@ -630,7 +774,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         user_context: Dict[str, Any],
         workflow_type: str = "food_logging",
         tavily_context: Optional[str] = None,
-        user_health_goals: Optional[str] = None
+        user_health_goals: Optional[str] = None,
+        is_first_meal_today: bool = True  # FIX: For streak celebration control
     ) -> Dict[str, Any]:
         """
         Generate dynamic coaching using GPT-4o based on user history and current meal.
@@ -667,6 +812,21 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         # Extract daily_totals from user_context (passed from orchestrator)
         daily_totals = user_context.get("daily_totals") if user_context else None
+
+        # CRITICAL FIX: Fetch from database if not provided (Bug #8 fix)
+        if not daily_totals and user_id != "anonymous":
+            try:
+                from kai.database import get_daily_nutrition_totals
+                from datetime import date
+                daily_totals = await get_daily_nutrition_totals(user_id, date.today().isoformat())
+                if daily_totals:
+                    logger.info(f"   ✓ Daily totals fetched from database (fallback)")
+                else:
+                    logger.info(f"   ⚠️  No daily totals in database - showing meal-only nutrition")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Could not fetch daily totals from database: {e}")
+                daily_totals = None
+
         if daily_totals:
             logger.info(f"   Daily totals available: {list(daily_totals.keys())}")
         else:
@@ -731,7 +891,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             size_emoji=size_emoji,
             user_health_goals=user_health_goals,  # NEW: Pass health goals to prompt
             user_name=user_name,  # NEW: Pass user name for personalization
-            daily_totals=daily_totals  # NEW: Pass daily totals for cumulative progress
+            daily_totals=daily_totals,  # NEW: Pass daily totals for cumulative progress
+            is_first_meal_today=is_first_meal_today  # FIX: Pass first meal flag for streak celebration
         )
 
         # Call GPT-4o for dynamic coaching
@@ -790,6 +951,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 
         try:
             import random
+            import time
+
+            # CRITICAL FIX (Bug #3): Seed random with time to get different results each call
+            random.seed(int(time.time() * 1000))  # Millisecond precision for variety
 
             # Build semantic search query based on nutrient gap
             # Add slight variations to queries to get more diverse results
@@ -809,10 +974,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                     "Calcium sources in Nigerian cuisine: dairy, fish, vegetables",
                     "Nigerian meals for strong bones: calcium-rich options"
                 ],
-                "vitamin_a": [
-                    "Nigerian vitamin A foods: yellow vegetables, plantain, palm oil, carrots",
-                    "Nigerian foods for eye health: vitamin A rich options",
-                    "Orange and green Nigerian vegetables and fruits"
+                "potassium": [
+                    "Nigerian potassium-rich foods: plantains, yams, beans, leafy greens, fish",
+                    "Nigerian foods for heart health: potassium-rich options",
+                    "Nigerian foods for blood pressure: high-potassium meals"
                 ],
                 "zinc": [
                     "Nigerian zinc-rich foods: meat, fish, beans, nuts, whole grains",
@@ -847,7 +1012,10 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             # Search ChromaDB
             results = self.vector_db.search(query, n_results=top_k)
 
-            logger.info(f"   → Retrieved {len(results)} foods from ChromaDB for {primary_gap} gap (query variation used)")
+            # CRITICAL FIX (Bug #3): Shuffle results to get variety in suggestions
+            random.shuffle(results)
+
+            logger.info(f"   → Retrieved {len(results)} foods from ChromaDB for {primary_gap} gap (shuffled for variety)")
             return results
 
         except Exception as e:
@@ -872,7 +1040,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         if not foods:
             # Fallback to minimal list if ChromaDB fails
             return """- Egusi Soup: Great protein and iron
-- Efo Riro: Excellent iron and vitamin A
+- Efo Riro: Excellent iron and potassium
 - Jollof Rice: Moderate calories, carb-heavy
 - Grilled Fish: Excellent protein and calcium
 - Eba: High carbs, filling swallow"""
@@ -889,11 +1057,11 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
             typical_serving_g = 200
 
             # Calculate %RDV for typical serving (using women's RDV as baseline)
-            # Women's RDV: protein 46g, iron 18mg, calcium 1000mg, vitamin A 700mcg
+            # Women's RDV: protein 46g, iron 18mg, calcium 1000mg, potassium 2600mg
             iron_pct = (nutrients.get("iron", 0) * typical_serving_g / 100) / 18 * 100
             protein_pct = (nutrients.get("protein", 0) * typical_serving_g / 100) / 46 * 100
             calcium_pct = (nutrients.get("calcium", 0) * typical_serving_g / 100) / 1000 * 100
-            vitamin_a_pct = (nutrients.get("vitamin_a", 0) * typical_serving_g / 100) / 700 * 100
+            potassium_pct = (nutrients.get("potassium", 0) * typical_serving_g / 100) / 2600 * 100
 
             # Highlight primary gap nutrient (using %RDV thresholds)
             if primary_gap == "iron" and iron_pct >= 40:  # >=40% RDV
@@ -902,8 +1070,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
                 highlights.append("excellent protein")
             elif primary_gap == "calcium" and calcium_pct >= 40:  # >=40% RDV
                 highlights.append("high calcium")
-            elif primary_gap == "vitamin_a" and vitamin_a_pct >= 40:  # >=40% RDV
-                highlights.append("rich in vitamin A")
+            elif primary_gap == "potassium" and potassium_pct >= 40:  # >=40% RDV
+                highlights.append("rich in potassium")
 
             # Add other notable nutrients
             if protein_pct >= 30 and "protein" not in primary_gap:
@@ -948,7 +1116,8 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         size_emoji: str = "🍽️",
         user_health_goals: Optional[str] = None,
         user_name: Optional[str] = None,
-        daily_totals: Optional[Dict[str, float]] = None
+        daily_totals: Optional[Dict[str, float]] = None,
+        is_first_meal_today: bool = True  # FIX: For streak celebration control
     ) -> str:
         """Build dynamic system prompt for GPT-4o coaching generation.
 
@@ -967,7 +1136,7 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
         relevant_foods = self._get_relevant_foods_for_gap(
             primary_gap=primary_gap,
             user_health_goals=user_health_goals,
-            top_k=15
+            top_k=20  # Increased from 15 to 20 for more variety
         )
 
         # Format dynamic food list for prompt
@@ -1068,9 +1237,14 @@ Use your tools to analyze nutrition data and provide personalized, culturally-re
 - Meal Type: {meal_type.upper()}
 - Meal Size: {meal_size} {size_emoji} ({knowledge_result.total_calories:.0f} kcal)
 
-**DAILY PROGRESS (So Far Today):**
-CRITICAL: The percentages below show CUMULATIVE DAILY PROGRESS, not just this single meal!
-Use this to give context like "You've had X so far today (Y% of your goal)".
+**DAILY PROGRESS (Structured Data - Use This for Calculations!):**
+CRITICAL: Use these EXACT numbers for all calculations and progress messages.
+DO NOT parse the formatted text below - use THIS structured data!
+
+{self._build_structured_daily_progress(knowledge_result, daily_totals, user_rdv)}
+
+**DAILY PROGRESS (Human-Readable Reference):**
+The formatted text below is for context only. Use the structured data above for all calculations!
 
 {self._format_daily_progress_with_meal(
     "Calories", knowledge_result.total_calories, daily_totals, user_rdv.get('calories', 2500), "kcal"
@@ -1091,7 +1265,7 @@ Use this to give context like "You've had X so far today (Y% of your goal)".
     "Calcium", knowledge_result.total_calcium, daily_totals, user_rdv.get('calcium', 1000), "mg"
 )}
 {self._format_daily_progress_with_meal(
-    "Vitamin A", knowledge_result.total_vitamin_a, daily_totals, user_rdv.get('vitamin_a', 800), "mcg"
+    "Potassium", knowledge_result.total_potassium, daily_totals, user_rdv.get('potassium', 800), "mg"
 )}
 {self._format_daily_progress_with_meal(
     "Zinc", knowledge_result.total_zinc, daily_totals, user_rdv.get('zinc', 8), "mg"
@@ -1110,7 +1284,7 @@ Use this to give context like "You've had X so far today (Y% of your goal)".
 - Fat: {user_rdv.get('fat', 0):.1f}g
 - Iron: {user_rdv.get('iron', 0):.1f}mg
 - Calcium: {user_rdv.get('calcium', 0):.1f}mg
-- Vitamin A: {user_rdv.get('vitamin_a', 0):.1f}mcg
+- Potassium: {user_rdv.get('potassium', 0):.1f}mg
 - Zinc: {user_rdv.get('zinc', 0):.1f}mg
 
 **User's Weekly Average Intake (Last 7 days):**
@@ -1120,7 +1294,7 @@ Use this to give context like "You've had X so far today (Y% of your goal)".
 - Fat: {week1_averages.get('fat', 0):.1f}g
 - Iron: {week1_averages.get('iron', 0):.1f}mg
 - Calcium: {week1_averages.get('calcium', 0):.1f}mg
-- Vitamin A: {week1_averages.get('vitamin_a', 0):.1f}mcg
+- Potassium: {week1_averages.get('potassium', 0):.1f}mg
 - Zinc: {week1_averages.get('zinc', 0):.1f}mg
 
 **Nutrient Trends (Week-over-Week):**
@@ -1173,32 +1347,56 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
                 Use qualitative language for nutrients (great/good/low protein) - NO specific measurements like '30g' or '8mg'.
                 Only mention kcal when critical for decision-making (especially weight loss/gain goals).
                 Reference health goal if relevant: {user_health_goals or 'general wellness'}.
-                Celebrate streaks when current_streak >= 3.
-                Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ vitamin A, ⚡ calories, 🔥 streaks.
 
-                **CRITICAL NUTRIENT RULES (BASED ON DAILY PROGRESS):**
-                IMPORTANT: The percentages shown in 'DAILY PROGRESS' section are CUMULATIVE DAILY TOTALS (not just this meal!).
-                Use them to give context about overall daily nutrition, not to judge the single meal.
+                **STREAK CELEBRATION RULES:**
+                - Current streak: {current_streak} days
+                - Is this the first meal of the day? {is_first_meal_today}
+                - IF is_first_meal_today=True AND streak >= 3: Your message MUST START with streak celebration!
+                  * 3-6 days: START with "{current_streak}-day streak! 🔥"
+                  * 7-13 days: START with "Amazing {current_streak}-day streak! 🔥"
+                  * 14+ days: START with "Incredible {current_streak}-day streak! 🔥🔥"
+                - IF is_first_meal_today=False: DO NOT mention streak at all - proceed with normal meal assessment
+                - Streak celebration ONLY on first meal of the day (not every meal)
+                - Example (first meal, 5-day streak): "5-day streak! 🔥 Your Egusi soup with fish was excellent..."
+                - Example (subsequent meal, 5-day streak): "Your Jollof rice with chicken was solid! Good protein 💪"
 
-                **ALWAYS reference the cumulative daily totals (from 'TODAY SO FAR' field) in your feedback, NOT just the current meal values!**
+                Use emojis: 💪 protein, 🩸 iron, 🦴 calcium, 👁️ potassium, ⚡ calories, 🔥 streaks.
 
-                - Daily protein >= 70%: Say "You're doing great on protein today! 💪"
-                - Daily protein 40-69%: Say "Good protein progress today 💪, keep it up!"
-                - Daily protein < 40%: Say "Let's boost protein for your remaining meals 💪"
-                - Same logic applies to iron 🩸, calcium 🦴, vitamin A 👁️, zinc
-                - Only flag nutrients as 'low' if DAILY total is < 40% RDV
+                **CRITICAL NUTRIENT RULES (BASED ON DAILY CUMULATIVE PROGRESS):**
+                IMPORTANT: The percentages in 'DAILY PROGRESS' are CUMULATIVE (all meals so far today).
+                DO NOT judge this single meal - judge the ENTIRE DAY's progress!
 
-                Examples (using DAILY cumulative totals from 'TODAY SO FAR'):
-                  * "You've had 42g protein today (70% of goal) - excellent progress! 💪"
-                  * "You're at 8mg iron so far (44% of goal) - great! 🩸 One more meal and you'll hit your target"
-                  * "Only 15g protein today (25% of goal) - add more protein to your next meal 💪"
-                  * For CALORIES: "You're at 1650/2500 kcal today (66%) - you have 850 kcal remaining for your next meal"
+                **DAILY PROGRESS THRESHOLDS (for cumulative daily totals, NOT single meals):**
+                - >= 70% of daily RDV: "Great progress today!" (on track)
+                - 40-69% of daily RDV: "Good progress, keep going!" (decent)
+                - < 40% of daily RDV: "Needs attention today" (concerning for full day)
 
-                Examples:
-                - GOOD meal WITH STREAK: '{user_name or "Great job"}, {current_streak}-day streak! 🔥 Your Egusi soup with fish was excellent! Great protein 💪 and iron 🩸. You have ~1050 kcal left for dinner.'
-                - GOOD meal: 'Your {meal_type} of Jollof rice with chicken was solid! Good protein and energy. Keep it balanced with vegetables next time.'
-                - POOR meal (weight loss): 'Your fried plantain with rice (800 kcal ⚡) puts you over target. Low protein and iron. Eat lighter for dinner to stay on track.'
-                - OKAY meal: 'Your Eba with vegetable soup was decent. Good carbs but low protein. Add fish or chicken next time for balance.'",
+                **ALWAYS reference cumulative daily totals (TODAY SO FAR values), NOT just this meal!**
+
+                SPECIFIC THRESHOLDS FOR EACH NUTRIENT (based on DAILY CUMULATIVE totals):
+                - Daily protein >= 70%: "You're doing great on protein today! 💪"
+                - Daily protein 40-69%: "Good protein progress today 💪, keep it up!"
+                - Daily protein < 40%: "Let's boost protein for your remaining meals 💪"
+                - Daily iron >= 70%: "Excellent iron intake today! 🩸"
+                - Daily iron 40-69%: "Good iron progress! 🩸"
+                - Daily iron < 40%: "Add more iron-rich foods today 🩸"
+                - Same threshold logic for calcium 🦴, potassium 👁️, zinc
+                - ONLY flag nutrients as 'low' if DAILY CUMULATIVE total is < 40% RDV (not per meal!)
+
+                Examples (using STRUCTURED DATA from 'DAILY PROGRESS (Structured Data)'):
+                  * "You've had 42g protein today (70% of goal) - excellent progress! 💪" (use protein.daily_total and protein.percent_of_target)
+                  * "You're at 8mg iron so far (44% of goal) - great! 🩸 One more meal and you'll hit your target" (use iron.daily_total and iron.percent_of_target)
+                  * "Only 15g protein today (25% of goal) - add more protein to your next meal 💪" (use protein.daily_total and protein.percent_of_target)
+                  * For CALORIES: "You're at 1650/2500 kcal today (66%) - you have 850 kcal remaining for your next meal" (use calories.daily_total, calories.target, calories.remaining)
+
+                Examples (streak ONLY if is_first_meal_today=True AND >= 3 days):
+                - FIRST MEAL with 3-day streak: '{user_name or "Great job"}, 3-day streak! 🔥 Your Egusi soup with fish was excellent! Great protein 💪 and iron 🩸.'
+                - FIRST MEAL with 7-day streak: 'Amazing week-long streak! 🔥 Your Jollof rice with chicken was solid! You're at 1200/2500 kcal today.'
+                - FIRST MEAL with 14-day streak: 'Incredible 2-week streak! 🔥🔥 Your Efo riro with fish was perfect! High iron 🩸 and protein 💪.'
+                - SUBSEQUENT MEAL (no streak mention): 'Your Jollof rice with chicken was solid! You're at 1650/2500 kcal today - 850 left for dinner.'
+                - SUBSEQUENT MEAL (no streak mention): 'Your Eba with vegetable soup was decent but low on protein. Add fish to your next meal!'
+                - NO STREAK (< 3 days): 'Your {meal_type} of Jollof rice with chicken was solid! Good protein and energy.'
+                - POOR meal (weight loss): 'Your fried plantain with rice (800 kcal ⚡) puts you over target. Low protein and iron. Eat lighter for dinner to stay on track.'",
 
     "next_meal_combo": {{
         "combo": "ONE specific Nigerian meal combo selected from the knowledge base above.
@@ -1230,14 +1428,22 @@ Generate a CONCISE, HONEST JSON response with ONLY these fields:
         "status": "excellent | on_track | needs_attention",  // Honest assessment
         "message": "One sentence about progress toward goal.
 
-                    **CRITICAL: Use the CUMULATIVE DAILY TOTALS from 'DAILY PROGRESS' section above, NOT just this single meal!**
+                    **CRITICAL: Use the STRUCTURED DATA from 'DAILY PROGRESS (Structured Data)' section above!**
+                    DO NOT parse formatted text - use the JSON values directly!
 
-                    For weight goals, show: '[cumulative daily kcal] / [target kcal] kcal today'
+                    Access the data like this:
+                    - calories.daily_total (current cumulative intake today)
+                    - calories.target (daily goal)
+                    - calories.remaining (how much left for the day)
+                    - calories.percent_of_target (percentage progress)
+                    - Same structure for: protein, carbs, fat, iron, calcium, potassium, zinc
 
-                    Examples:
-                    - Weight loss: 'You're at 1650/1800 kcal today - only 150 left for dinner. Stay disciplined!'
+                    For weight goals, use: calories.daily_total / calories.target format
+
+                    Examples (using structured data):
+                    - Weight loss: 'You're at 1650/1800 kcal today - only 150 kcal left for dinner. Stay disciplined!'
                     - Muscle gain: 'Great protein today! You're at 85g/120g. One more high-protein meal and you'll hit your target.'
-                    - General wellness: 'Good balance today. Your iron and protein levels are looking solid!'"
+                    - General wellness: 'Good balance today. Your iron (8mg/18mg) and protein (45g/60g) levels are looking solid!'"
     }}
 }}
 
@@ -1320,7 +1526,7 @@ Per 250g serving (typical portion):
 - Fat: {knowledge_result.total_fat:.1f}g ({(knowledge_result.total_fat/user_rdv.get('fat',70)*100):.0f}% of daily needs)
 - Iron: {knowledge_result.total_iron:.1f}mg ({(knowledge_result.total_iron/user_rdv.get('iron',18)*100):.0f}% of daily needs)
 - Calcium: {knowledge_result.total_calcium:.1f}mg ({(knowledge_result.total_calcium/user_rdv.get('calcium',1000)*100):.0f}% of daily needs)
-- Vitamin A: {knowledge_result.total_vitamin_a:.1f}mcg ({(knowledge_result.total_vitamin_a/user_rdv.get('vitamin_a',800)*100):.0f}% of daily needs)
+- Potassium: {knowledge_result.total_potassium:.1f}mg ({(knowledge_result.total_potassium/user_rdv.get('potassium',800)*100):.0f}% of daily needs)
 - Zinc: {knowledge_result.total_zinc:.1f}mg ({(knowledge_result.total_zinc/user_rdv.get('zinc',8)*100):.0f}% of daily needs)
 
 Source: Nigerian Foods Nutrition Database
@@ -1438,7 +1644,7 @@ Generate the JSON now:"""
             - Be enthusiastic and celebratory!
             - Highlight all the HIGH nutrients with excitement
             - Encourage continuation
-            - Example: "Excellent choice! 🎉 This meal is a nutrient powerhouse! Packed with protein (45g - 75%) 💪, iron (8mg - 44%) 🩸, and vitamin A (65%) 👁️. You're nourishing your body perfectly! Keep up this amazing work! 🌟"
+            - Example: "Excellent choice! 🎉 This meal is a nutrient powerhouse! Packed with protein (45g - 75%) 💪, iron (8mg - 44%) 🩸, and potassium (65%) 👁️. You're nourishing your body perfectly! Keep up this amazing work! 🌟"
             """
 
         elif meal_quality == "good":
@@ -1448,7 +1654,7 @@ Generate the JSON now:"""
             - Be positive and supportive
             - Highlight the HIGH nutrients
             - Gently mention what could be better (if relevant)
-            - Example: "Great job logging! 🎉 This meal is rich in protein (35g - 58%) 💪 and vitamin A (520mcg - 65%) 👁️. It's a bit low in calcium (9%) 🦴 - consider adding yogurt or milk next time. Overall, great choice! Keep it up!"
+            - Example: "Great job logging! 🎉 This meal is rich in protein (35g - 58%) 💪 and potassium (520mg - 65%) 👁️. It's a bit low in calcium (9%) 🦴 - consider adding yogurt or milk next time. Overall, great choice! Keep it up!"
             """
 
         else:  # meal_quality == "okay"
@@ -1458,7 +1664,7 @@ Generate the JSON now:"""
             - Be supportive and constructive
             - Acknowledge what's good
             - Suggest simple improvements
-            - Example: "Nice logging! 😊 This meal provides decent energy (calories 25%) ⚡ and some protein (20%) 💪. To make it even better, add some vegetables (for vitamin A 👁️) or dairy (for calcium 🦴). Small additions make a big difference!"
+            - Example: "Nice logging! 😊 This meal provides decent energy (calories 25%) ⚡ and some protein (20%) 💪. To make it even better, add some vegetables (for potassium 👁️) or dairy (for calcium 🦴). Small additions make a big difference!"
             """
 
     def _fallback_coaching(
@@ -1496,437 +1702,6 @@ Generate the JSON now:"""
             "motivational_tip": tip,
             "next_steps": steps
         }
-
-    def _tool_generate_nutrition_insights(
-        self,
-        knowledge_result: KnowledgeResult,
-        user_context: Dict[str, Any]
-    ) -> str:
-        """
-        DEPRECATED: Old hardcoded nutrition insights tool.
-
-        This method is DEPRECATED and replaced by _generate_dynamic_coaching().
-        Kept for backward compatibility only.
-
-        NEW APPROACH: Use provide_coaching() with user_id instead.
-
-        Args:
-            knowledge_result: Nutrition data to analyze
-            user_context: User context (age, pregnancy, goals)
-
-        Returns:
-            JSON string with coaching insights
-        """
-        logger.warning("⚠️  DEPRECATED: Using old hardcoded coaching logic. Migrate to provide_coaching(user_id)")
-
-        # Extract user context
-        is_pregnant = user_context.get("is_pregnant", False)
-        health_goals = user_context.get("health_goals", [])
-
-        # Determine appropriate RDVs
-        iron_rdv = self.rdv["iron_pregnant"] if is_pregnant else self.rdv["iron"]
-
-        # Calculate nutrient insights
-        nutrient_insights = []
-
-        # Iron insight (Evidence-based thresholds)
-        iron_percentage = (knowledge_result.total_iron / iron_rdv) * 100
-        if iron_percentage < 50:
-            iron_status = "low"  # Changed from "deficient" - <50% needs attention
-            iron_advice = (
-                "Your iron intake is quite low. Iron is crucial for preventing anemia, "
-                "especially for Nigerian women. Try adding iron-rich foods like Efo Riro "
-                "(spinach soup), beans, or organ meats to your meals."
-            )
-        elif iron_percentage < 75:
-            iron_status = "moderate"  # Changed from "adequate" - 50-74% could improve
-            iron_advice = (
-                "You're getting some iron, but there's room for improvement. Consider adding "
-                "more leafy greens like Efo Riro or protein sources like beans to boost your intake."
-            )
-        elif iron_percentage < 100:
-            iron_status = "good"  # New tier - 75-99% is adequate
-            iron_advice = (
-                "Good iron intake! You're getting most of what you need. Keep including "
-                "iron-rich foods like leafy greens and proteins in your meals."
-            )
-        else:
-            iron_status = "excellent"  # Changed from "optimal" - ≥100% is excellent
-            iron_advice = (
-                "Excellent work! Your iron intake is meeting or exceeding your daily needs. "
-                "Keep including iron-rich foods like leafy greens and proteins in your meals."
-            )
-
-        nutrient_insights.append({
-            "nutrient": "iron",
-            "current_value": round(knowledge_result.total_iron, 2),
-            "recommended_daily_value": iron_rdv,
-            "percentage_met": round(iron_percentage, 1),
-            "status": iron_status,
-            "advice": iron_advice
-        })
-
-        # Protein insight (Evidence-based thresholds)
-        protein_percentage = (knowledge_result.total_protein / self.rdv["protein"]) * 100
-        if protein_percentage < 50:
-            protein_status = "low"  # Changed from "deficient" - <50% needs attention
-            protein_advice = (
-                "Your protein intake is low. Protein is essential for body repair and strength. "
-                "Try adding affordable protein like beans, eggs, or fish to your meals."
-            )
-        elif protein_percentage < 75:
-            protein_status = "moderate"  # Changed from "adequate" - 50-74% could improve
-            protein_advice = (
-                "You're getting decent protein, but you can do better. Consider adding more "
-                "protein sources like Moi Moi (bean pudding), fish, or chicken."
-            )
-        elif protein_percentage < 100:
-            protein_status = "good"  # New tier - 75-99% is adequate
-            protein_advice = (
-                "Good protein intake! You're getting most of what you need for body repair and strength. "
-                "Keep it up!"
-            )
-        else:
-            protein_status = "excellent"  # Changed from "optimal" - ≥100% is excellent
-            protein_advice = (
-                "Excellent protein! You're meeting or exceeding your body's needs. "
-                "Keep including protein in each meal."
-            )
-
-        nutrient_insights.append({
-            "nutrient": "protein",
-            "current_value": round(knowledge_result.total_protein, 2),
-            "recommended_daily_value": self.rdv["protein"],
-            "percentage_met": round(protein_percentage, 1),
-            "status": protein_status,
-            "advice": protein_advice
-        })
-
-        # Calcium insight (Evidence-based thresholds)
-        calcium_percentage = (knowledge_result.total_calcium / self.rdv["calcium"]) * 100
-        if calcium_percentage < 50:
-            calcium_status = "low"  # Changed from "deficient" - <50% needs attention
-            calcium_advice = (
-                "Your calcium intake needs attention. Calcium is vital for strong bones, "
-                "especially during pregnancy. Try adding more dairy, fish with bones, or "
-                "leafy greens to your diet."
-            )
-        elif calcium_percentage < 75:
-            calcium_status = "moderate"  # Changed from "adequate" - 50-74% could improve
-            calcium_advice = (
-                "You're getting some calcium, but more would be beneficial. Consider adding "
-                "foods like milk, sardines, or vegetables to boost your intake."
-            )
-        elif calcium_percentage < 100:
-            calcium_status = "good"  # New tier - 75-99% is adequate
-            calcium_advice = (
-                "Good calcium intake! You're getting most of what you need for strong bones. "
-                "Keep it up!"
-            )
-        else:
-            calcium_status = "excellent"  # Changed from "optimal" - ≥100% is excellent
-            calcium_advice = (
-                "Excellent! Your calcium intake is meeting or exceeding your daily needs. "
-                "This is great for your bone health."
-            )
-
-        nutrient_insights.append({
-            "nutrient": "calcium",
-            "current_value": round(knowledge_result.total_calcium, 2),
-            "recommended_daily_value": self.rdv["calcium"],
-            "percentage_met": round(calcium_percentage, 1),
-            "status": calcium_status,
-            "advice": calcium_advice
-        })
-
-        # Calorie insight
-        calorie_percentage = (knowledge_result.total_calories / self.rdv["calories"]) * 100
-        if calorie_percentage < 50:
-            calorie_status = "deficient"
-            calorie_advice = (
-                "Your calorie intake seems low for this meal. Make sure you're eating "
-                "enough throughout the day to maintain your energy and health."
-            )
-        elif calorie_percentage > 120:
-            calorie_status = "excessive"
-            calorie_advice = (
-                "This meal is quite high in calories. Consider balancing with lighter meals "
-                "throughout the day."
-            )
-        else:
-            calorie_status = "optimal"
-            calorie_advice = (
-                "Your calorie intake is well-balanced. Keep up the good work!"
-            )
-
-        nutrient_insights.append({
-            "nutrient": "calories",
-            "current_value": round(knowledge_result.total_calories, 2),
-            "recommended_daily_value": self.rdv["calories"],
-            "percentage_met": round(calorie_percentage, 1),
-            "status": calorie_status,
-            "advice": calorie_advice
-        })
-
-        # Generate personalized message
-        foods_eaten = [food.name for food in knowledge_result.foods]
-        personalized_message = self._generate_personalized_message(
-            foods_eaten=foods_eaten,
-            nutrient_insights=nutrient_insights,
-            is_pregnant=is_pregnant
-        )
-
-        # Generate motivational tip
-        motivational_tip = self._generate_motivational_tip(
-            nutrient_insights=nutrient_insights,
-            is_pregnant=is_pregnant
-        )
-
-        # Generate next steps
-        next_steps = self._generate_next_steps(nutrient_insights)
-
-        # Build result
-        result = {
-            "personalized_message": personalized_message,
-            "nutrient_insights": nutrient_insights,
-            "meal_suggestions": [],  # Would call suggest_meals tool if needed
-            "motivational_tip": motivational_tip,
-            "next_steps": next_steps,
-            "tone": "encouraging"
-        }
-
-        logger.info(f"   📊 Generated {len(nutrient_insights)} nutrient insights")
-
-        return json.dumps(result)
-
-    def _food_list_phrase(self, foods: List[str]) -> str:
-        # Helper to produce natural food enumeration
-        if not foods:
-            return "your meal"
-        if len(foods) == 1:
-            return foods[0]
-        if len(foods) == 2:
-            return f"{foods[0]} and {foods[1]}"
-        return f"{', '.join(foods[:-1])}, and {foods[-1]}"
-
-    def _generate_personalized_message(
-        self,
-        foods_eaten: List[str],
-        nutrient_insights: List[Dict[str, Any]],
-        is_pregnant: bool
-    ) -> str:
-        """Generate a warm, personalized message based on the meal."""
-        intro = f"🎉 Great job logging your {self._food_list_phrase(foods_eaten)}! "
-
-        # Find the nutrient with best status
-        good_nutrients = [
-            ni for ni in nutrient_insights
-            if ni["status"] in ["optimal", "adequate"]
-        ]
-
-        # Find nutrients needing attention
-        needs_attention = [
-            ni for ni in nutrient_insights
-            if ni["status"] == "deficient"
-        ]
-
-        message_parts = [intro]
-
-        # Celebrate strengths
-        if good_nutrients:
-            good_nutrient_names = [ni["nutrient"] for ni in good_nutrients[:2]]
-            message_parts.append(
-                f"You're doing well with your {' and '.join(good_nutrient_names)} intake! "
-                "Keep up the great work."
-            )
-
-        # Gentle guidance for improvements
-        if needs_attention:
-            need_names = [ni["nutrient"] for ni in needs_attention]
-            if len(need_names) == 1:
-                message_parts.append(
-                    f"I noticed your {need_names[0]} intake could use a boost. "
-                    "This is important for your health, especially as a Nigerian woman."
-                )
-            else:
-                message_parts.append(
-                    f"I noticed your {' and '.join(need_names)} intake could use some attention. "
-                    "Let's work together to improve these areas."
-                )
-
-        # Pregnancy-specific encouragement
-        if is_pregnant:
-            message_parts.append(
-                "As an expecting mother, your nutrition is especially important - "
-                "you're feeding both yourself and your baby. You're doing great by tracking!"
-            )
-
-        return " ".join(message_parts)
-
-    def _generate_motivational_tip(
-        self,
-        nutrient_insights: List[Dict[str, Any]],
-        is_pregnant: bool
-    ) -> str:
-        """Generate a motivational tip based on nutrition status."""
-        deficient_count = len([ni for ni in nutrient_insights if ni["status"] == "deficient"])
-
-        if deficient_count == 0:
-            return (
-                "You're making excellent choices! Every healthy meal is an investment "
-                "in your wellbeing. Keep nourishing yourself with Nigerian foods you love."
-            )
-        elif deficient_count == 1:
-            return (
-                "Small changes make big differences! Adding just one nutrient-rich food "
-                "to your meals can transform your health. You've got this!"
-            )
-        else:
-            return (
-                "Progress, not perfection! Every step towards better nutrition counts. "
-                "Focus on one improvement at a time, and celebrate each victory."
-            )
-
-    def _generate_next_steps(
-        self,
-        nutrient_insights: List[Dict[str, Any]]
-    ) -> List[str]:
-        """Generate actionable next steps based on nutrition gaps."""
-        next_steps = []
-
-        # Find most deficient nutrient
-        deficient_nutrients = [
-            ni for ni in nutrient_insights
-            if ni["status"] == "deficient"
-        ]
-
-        if not deficient_nutrients:
-            next_steps.append("Continue with your balanced eating habits")
-            next_steps.append("Try to log all your meals today to see the full picture")
-            return next_steps
-
-        # Prioritize by health impact
-        for ni in deficient_nutrients[:2]:  # Top 2 priorities
-            nutrient = ni["nutrient"]
-
-            if nutrient == "iron":
-                next_steps.append(
-                    "Add iron-rich foods: beans, Efo Riro (spinach), liver, fish, chicken, or red meat with vegetables"
-                )
-
-            elif nutrient == "protein":
-                next_steps.append(
-                    "Boost protein: beans, Moi Moi, eggs, groundnuts, fish, chicken, or meat"
-                )
-
-            elif nutrient == "calcium":
-                next_steps.append(
-                    "Increase calcium: sardines (with bones), milk, leafy greens, dairy products, or fortified foods"
-                )
-
-        # Always add a tracking reminder
-        next_steps.append("Log your next meal to continue tracking your progress")
-
-        return next_steps[:3]  # Max 3 steps to avoid overwhelming
-
-    def _tool_suggest_meals(
-        self,
-        nutrient_needs: List[str],
-        meal_type: str = "lunch"
-    ) -> str:
-        """
-        Tool function for suggesting Nigerian meals based on needs.
-
-        Args:
-            nutrient_needs: List of nutrients to focus on
-            meal_type: Type of meal
-
-        Returns:
-            JSON string with meal suggestions
-        """
-        logger.info(
-            f"🔧 Tool: suggest_meals "
-            f"(nutrients={nutrient_needs}, type={meal_type})"
-        )
-
-        # Nigerian meal suggestions database (simplified)
-        meal_database = {
-            "breakfast": [
-                {
-                    "name": "Akara and Pap",
-                    "nutrients": ["protein", "iron"],
-                    "ingredients": ["beans", "pepper", "onion", "corn"]
-                },
-                {
-                    "name": "Bread and Eggs with Tea",
-                    "nutrients": ["protein", "calcium"],
-                    "ingredients": ["bread", "eggs", "milk"]
-                },
-                {
-                    "name": "Moi Moi with Ogi",
-                    "nutrients": ["protein", "iron"],
-                    "ingredients": ["beans", "eggs", "crayfish", "corn"]
-                }
-            ],
-            "lunch": [
-                {
-                    "name": "Efo Riro with Eba",
-                    "nutrients": ["iron", "vitamin_a", "calcium"],
-                    "ingredients": ["spinach", "palm oil", "crayfish", "garri"]
-                },
-                {
-                    "name": "Jollof Rice with Chicken",
-                    "nutrients": ["protein", "iron"],
-                    "ingredients": ["rice", "tomatoes", "chicken", "vegetables"]
-                },
-                {
-                    "name": "Egusi Soup with Pounded Yam",
-                    "nutrients": ["protein", "iron", "calcium"],
-                    "ingredients": ["egusi", "leafy vegetables", "meat", "yam"]
-                }
-            ],
-            "dinner": [
-                {
-                    "name": "Pepper Soup with Fish",
-                    "nutrients": ["protein", "calcium", "iron"],
-                    "ingredients": ["fish", "pepper", "spices", "yam"]
-                },
-                {
-                    "name": "Beans and Plantain",
-                    "nutrients": ["protein", "iron"],
-                    "ingredients": ["beans", "plantain", "palm oil"]
-                },
-                {
-                    "name": "Okra Soup with Fufu",
-                    "nutrients": ["iron", "calcium"],
-                    "ingredients": ["okra", "fish", "crayfish", "cassava"]
-                }
-            ]
-        }
-
-        # Filter suggestions by meal type and nutrients
-        suggestions = []
-        for meal in meal_database.get(meal_type, []):
-            # Check if meal provides needed nutrients
-            meal_nutrients = set(meal["nutrients"])
-            needed_nutrients = set(nutrient_needs)
-
-            if meal_nutrients & needed_nutrients:  # Intersection
-                suggestions.append({
-                    "meal_name": meal["name"],
-                    "meal_type": meal_type,
-                    "ingredients": meal["ingredients"],
-                    "key_nutrients": {
-                        nutrient: 0 for nutrient in meal["nutrients"]  # Placeholder
-                    },
-                    "why_recommended": (
-                        f"This meal is rich in {', '.join(list(meal_nutrients & needed_nutrients))}"
-                    )
-                })
-
-        logger.info(f"   ✓ Generated {len(suggestions)} meal suggestions")
-
-        return json.dumps({"meal_suggestions": suggestions[:3]})  # Max 3 suggestions
 
     async def _call_tavily_mcp(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         """
@@ -2041,7 +1816,7 @@ Generate the JSON now:"""
             'fat': (knowledge_result.total_fat / user_rdv.get('fat', 70)) * 100,
             'iron': (knowledge_result.total_iron / user_rdv.get('iron', 18)) * 100,
             'calcium': (knowledge_result.total_calcium / user_rdv.get('calcium', 1000)) * 100,
-            'vitamin_a': (knowledge_result.total_vitamin_a / user_rdv.get('vitamin_a', 800)) * 100,
+            'potassium': (knowledge_result.total_potassium / user_rdv.get('potassium', 800)) * 100,
             'zinc': (knowledge_result.total_zinc / user_rdv.get('zinc', 8)) * 100,
         }
 
@@ -2055,7 +1830,7 @@ Generate the JSON now:"""
         protein_pct = nutrient_percentages['protein']
         iron_pct = nutrient_percentages['iron']
         calcium_pct = nutrient_percentages['calcium']
-        vitamin_a_pct = nutrient_percentages['vitamin_a']
+        potassium_pct = nutrient_percentages['potassium']
         zinc_pct = nutrient_percentages['zinc']
 
         high_count = len(high_nutrients)
@@ -2065,12 +1840,12 @@ Generate the JSON now:"""
         protein_is_high = protein_pct >= 40  # >40% RDV = HIGH (24g for women, 28g for men)
         iron_is_high = iron_pct >= 40  # >40% RDV = HIGH (7.2mg for women, 3.2mg for men)
         calcium_is_high = calcium_pct >= 40  # >40% RDV = HIGH (400mg)
-        vitamin_a_is_high = vitamin_a_pct >= 40  # >40% RDV = HIGH (280-360mcg)
+        potassium_is_high = potassium_pct >= 40  # >40% RDV = HIGH (280-360mg)
         zinc_is_high = zinc_pct >= 40  # >40% RDV = HIGH (3.2-4.4mg)
 
         # Any key nutrient being high protects meal quality
         any_key_nutrient_high = (protein_is_high or iron_is_high or calcium_is_high or
-                                 vitamin_a_is_high or zinc_is_high)
+                                 potassium_is_high or zinc_is_high)
 
         if protein_pct >= 30 and high_count >= 3:
             quality = "excellent"  # High protein + 3+ nutrients above 40%
@@ -2106,7 +1881,7 @@ Generate the JSON now:"""
                 # Calculate total nutrients for this meal
                 meal_totals = {
                     'calories': 0, 'protein': 0, 'carbohydrates': 0, 'fat': 0,
-                    'iron': 0, 'calcium': 0, 'vitamin_a': 0, 'zinc': 0
+                    'iron': 0, 'calcium': 0, 'potassium': 0, 'zinc': 0
                 }
 
                 for food in meal.get('foods', []):
@@ -2116,7 +1891,7 @@ Generate the JSON now:"""
                     meal_totals['fat'] += food.get('fat', 0)
                     meal_totals['iron'] += food.get('iron', 0)
                     meal_totals['calcium'] += food.get('calcium', 0)
-                    meal_totals['vitamin_a'] += food.get('vitamin_a', 0)
+                    meal_totals['potassium'] += food.get('potassium', 0)
                     meal_totals['zinc'] += food.get('zinc', 0)
 
                 # Create temporary KnowledgeResult to classify
@@ -2129,7 +1904,7 @@ Generate the JSON now:"""
                     total_fat=meal_totals['fat'],
                     total_iron=meal_totals['iron'],
                     total_calcium=meal_totals['calcium'],
-                    total_vitamin_a=meal_totals['vitamin_a'],
+                    total_potassium=meal_totals['potassium'],
                     total_zinc=meal_totals['zinc'],
                     query_interpretation="",
                     sources_used=[]
@@ -2221,7 +1996,7 @@ if __name__ == "__main__":
             fat=2.0,
             iron=1.5,
             calcium=50,
-            vitamin_a=200,
+            potassium=200,
             zinc=1.0
         )
 
@@ -2232,7 +2007,7 @@ if __name__ == "__main__":
             fat=5.0,
             iron=3.75,  # Low iron!
             calcium=125,  # Low calcium!
-            vitamin_a=500,
+            potassium=500,
             zinc=2.5
         )
 

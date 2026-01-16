@@ -48,7 +48,7 @@ async def log_meal(
                 "fat": 7.2,
                 "iron": 2.5,
                 "calcium": 45.0,
-                "vitamin_a": 120.0,
+                "potassium": 120.0,
                 "zinc": 1.2,
                 "confidence": 0.92
             }
@@ -75,7 +75,7 @@ async def log_meal(
         total_fat = 0.0
         total_iron = 0.0
         total_calcium = 0.0
-        total_vitamin_a = 0.0
+        total_potassium = 0.0
         total_zinc = 0.0
 
         for food in foods:
@@ -84,7 +84,7 @@ async def log_meal(
                 INSERT INTO meal_foods (
                     meal_id, food_name, food_id, portion_grams,
                     calories, protein, carbohydrates, fat,
-                    iron, calcium, vitamin_a, zinc, confidence
+                    iron, calcium, potassium, zinc, confidence
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -99,7 +99,7 @@ async def log_meal(
                     food["fat"],
                     food["iron"],
                     food["calcium"],
-                    food["vitamin_a"],
+                    food["potassium"],
                     food["zinc"],
                     food.get("confidence", 1.0)
                 )
@@ -112,14 +112,14 @@ async def log_meal(
             total_fat += food["fat"]
             total_iron += food["iron"]
             total_calcium += food["calcium"]
-            total_vitamin_a += food["vitamin_a"]
+            total_potassium += food["potassium"]
             total_zinc += food["zinc"]
 
         # Update daily nutrient totals
         await _update_daily_nutrients(
             db, user_id, meal_date,
             total_calories, total_protein, total_carbs, total_fat,
-            total_iron, total_calcium, total_vitamin_a, total_zinc
+            total_iron, total_calcium, total_potassium, total_zinc
         )
 
         await db.commit()
@@ -140,7 +140,7 @@ async def log_meal(
                 "fat": round(total_fat, 1),
                 "iron": round(total_iron, 2),
                 "calcium": round(total_calcium, 1),
-                "vitamin_a": round(total_vitamin_a, 1),
+                "potassium": round(total_potassium, 1),
                 "zinc": round(total_zinc, 2),
             }
         }
@@ -156,7 +156,7 @@ async def _update_daily_nutrients(
     fat: float,
     iron: float,
     calcium: float,
-    vitamin_a: float,
+    potassium: float,
     zinc: float
 ) -> None:
     """
@@ -166,7 +166,7 @@ async def _update_daily_nutrients(
         db: Database connection
         user_id: User identifier
         date: Date (ISO format)
-        calories, protein, carbs, fat, iron, calcium, vitamin_a, zinc: Nutrient amounts to add
+        calories, protein, carbs, fat, iron, calcium, potassium, zinc: Nutrient amounts to add
     """
     # Check if record exists
     cursor = await db.execute(
@@ -186,13 +186,13 @@ async def _update_daily_nutrients(
                 total_fat = total_fat + ?,
                 total_iron = total_iron + ?,
                 total_calcium = total_calcium + ?,
-                total_vitamin_a = total_vitamin_a + ?,
+                total_potassium = total_potassium + ?,
                 total_zinc = total_zinc + ?,
                 meal_count = meal_count + 1,
                 updated_at = ?
             WHERE user_id = ? AND date = ?
             """,
-            (calories, protein, carbs, fat, iron, calcium, vitamin_a, zinc,
+            (calories, protein, carbs, fat, iron, calcium, potassium, zinc,
              datetime.now().isoformat(), user_id, date)
         )
     else:
@@ -202,12 +202,12 @@ async def _update_daily_nutrients(
             INSERT INTO daily_nutrients (
                 user_id, date,
                 total_calories, total_protein, total_carbohydrates, total_fat,
-                total_iron, total_calcium, total_vitamin_a, total_zinc,
+                total_iron, total_calcium, total_potassium, total_zinc,
                 meal_count, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             """,
-            (user_id, date, calories, protein, carbs, fat, iron, calcium, vitamin_a, zinc,
+            (user_id, date, calories, protein, carbs, fat, iron, calcium, potassium, zinc,
              datetime.now().isoformat())
         )
 
@@ -250,7 +250,7 @@ async def get_user_meals(
                 """
                 SELECT food_name, food_id, portion_grams,
                        calories, protein, carbohydrates, fat,
-                       iron, calcium, vitamin_a, zinc, confidence
+                       iron, calcium, potassium, zinc, confidence
                 FROM meal_foods
                 WHERE meal_id = ?
                 """,
@@ -301,7 +301,7 @@ async def get_meals_by_date(
                 """
                 SELECT food_name, food_id, portion_grams,
                        calories, protein, carbohydrates, fat,
-                       iron, calcium, vitamin_a, zinc, confidence
+                       iron, calcium, potassium, zinc, confidence
                 FROM meal_foods
                 WHERE meal_id = ?
                 """,
@@ -416,7 +416,7 @@ async def delete_meal(meal_id: str) -> bool:
                 SUM(fat) as fat,
                 SUM(iron) as iron,
                 SUM(calcium) as calcium,
-                SUM(vitamin_a) as vitamin_a,
+                SUM(potassium) as potassium,
                 SUM(zinc) as zinc
             FROM meal_foods
             WHERE meal_id = ?
@@ -439,14 +439,14 @@ async def delete_meal(meal_id: str) -> bool:
                     total_fat = MAX(0, total_fat - ?),
                     total_iron = MAX(0, total_iron - ?),
                     total_calcium = MAX(0, total_calcium - ?),
-                    total_vitamin_a = MAX(0, total_vitamin_a - ?),
+                    total_potassium = MAX(0, total_potassium - ?),
                     total_zinc = MAX(0, total_zinc - ?),
                     meal_count = MAX(0, meal_count - 1),
                     updated_at = ?
                 WHERE user_id = ? AND date = ?
                 """,
                 (totals["calories"] or 0, totals["protein"] or 0, totals["carbs"] or 0, totals["fat"] or 0,
-                 totals["iron"] or 0, totals["calcium"] or 0, totals["vitamin_a"] or 0, totals["zinc"] or 0,
+                 totals["iron"] or 0, totals["calcium"] or 0, totals["potassium"] or 0, totals["zinc"] or 0,
                  datetime.now().isoformat(), user_id, meal_date)
             )
 
@@ -496,7 +496,7 @@ if __name__ == "__main__":
                 "fat": 7.2,
                 "iron": 2.5,
                 "calcium": 45.0,
-                "vitamin_a": 120.0,
+                "potassium": 120.0,
                 "zinc": 1.2,
                 "confidence": 0.92
             },
@@ -510,7 +510,7 @@ if __name__ == "__main__":
                 "fat": 0.4,
                 "iron": 0.6,
                 "calcium": 3.0,
-                "vitamin_a": 1127.0,
+                "potassium": 1127.0,
                 "zinc": 0.1,
                 "confidence": 0.95
             }

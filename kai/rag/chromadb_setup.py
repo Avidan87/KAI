@@ -137,7 +137,7 @@ class NigerianFoodVectorDB:
             "fat": nutrients.get("fat", 0),
             "iron": nutrients.get("iron", 0),
             "calcium": nutrients.get("calcium", 0),
-            "vitamin_a": nutrients.get("vitamin_a", 0),
+            "potassium": nutrients.get("potassium", 0),
             "zinc": nutrients.get("zinc", 0),
             # Store dietary flags as comma-separated string
             "dietary_flags": ",".join(food.get("dietary_flags", [])),
@@ -322,7 +322,7 @@ class NigerianFoodVectorDB:
         Get foods with high amounts of a specific nutrient.
 
         Args:
-            nutrient: Nutrient name ("protein", "iron", "calcium", "vitamin_a")
+            nutrient: Nutrient name ("protein", "iron", "calcium", "potassium")
             min_value: Minimum value of nutrient
             n_results: Number of results to return
 

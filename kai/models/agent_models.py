@@ -78,7 +78,7 @@ class NutrientInfo(BaseModel):
     fat: float
     iron: float
     calcium: float
-    vitamin_a: float
+    potassium: float
     zinc: float
 
 
@@ -108,7 +108,7 @@ class KnowledgeResult(BaseModel):
     total_fat: float
     total_iron: float
     total_calcium: float
-    total_vitamin_a: float
+    total_potassium: float
     total_zinc: float
     query_interpretation: str
     sources_used: List[str] = Field(default_factory=list)
@@ -177,7 +177,7 @@ class FoodLoggingResponse(BaseModel):
     total_fat: float = 0.0
     total_iron: float = 0.0
     total_calcium: float = 0.0
-    total_vitamin_a: float = 0.0
+    total_potassium: float = 0.0
     total_zinc: float = 0.0
     processing_time_ms: int = 0
     workflow_path: str = ""

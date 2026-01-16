@@ -26,7 +26,7 @@ BASE_RDV = {
         "fat": 70,              # g
         "iron": 8,              # mg
         "calcium": 1000,        # mg
-        "vitamin_a": 900,       # mcg RAE
+        "potassium": 3400,      # mg
         "zinc": 11,             # mg
     },
     # Female base values
@@ -37,7 +37,7 @@ BASE_RDV = {
         "fat": 60,              # g
         "iron": 18,             # mg (higher due to menstruation)
         "calcium": 1000,        # mg
-        "vitamin_a": 700,       # mcg RAE
+        "potassium": 2600,      # mg (slightly lower for females)
         "zinc": 8,              # mg
     },
 }
@@ -54,13 +54,13 @@ AGE_ADJUSTMENTS = {
             "calories": 0.9,        # 10% reduction for lower metabolism
             "iron": 1.0,            # Same (no menstruation factor)
             "calcium": 1.2,         # Increased for bone health
-            "vitamin_a": 1.0,       # Same
+            "potassium": 1.0,       # Same
         },
         "female": {
             "calories": 0.9,        # 10% reduction
             "iron": 0.44,           # Reduced to 8mg (post-menopause)
             "calcium": 1.2,         # Increased for bone health
-            "vitamin_a": 1.0,       # Same
+            "potassium": 1.0,       # Same
         },
     }
 }
@@ -104,7 +104,7 @@ def calculate_user_rdv(user_profile: Dict) -> Dict[str, float]:
             "fat": 77.0,
             "iron": 8.8,
             "calcium": 1100.0,
-            "vitamin_a": 990.0,
+            "potassium": 990.0,
             "zinc": 12.1
         }
     """
@@ -139,7 +139,7 @@ def calculate_user_rdv(user_profile: Dict) -> Dict[str, float]:
     elif activity_level == "very_active":
         micro_multiplier = 1.1
 
-    micronutrients = ["iron", "calcium", "vitamin_a", "zinc"]
+    micronutrients = ["iron", "calcium", "zinc"]  # Potassium doesn't scale with activity
     for nutrient in micronutrients:
         rdv[nutrient] *= micro_multiplier
 
@@ -432,6 +432,7 @@ def calculate_micronutrients(gender: str, age: int) -> Dict[str, float]:
     Age-based adjustments:
         - Iron (female): 18mg if age < 51, 8mg if age >= 51 (post-menopause)
         - Calcium: 1200mg if age >= 51, 1000mg otherwise (bone health)
+        - Potassium: 3400mg for males, 2600mg for females (heart health, blood pressure)
 
     Args:
         gender: "male" or "female"
@@ -442,28 +443,28 @@ def calculate_micronutrients(gender: str, age: int) -> Dict[str, float]:
         {
             "iron_mg": 8.0,
             "calcium_mg": 1000.0,
-            "vitamin_a_mcg": 900.0,
+            "potassium_mg": 3400.0,
             "zinc_mg": 11.0
         }
 
     Example:
         >>> calculate_micronutrients("female", 28)
-        {'iron_mg': 18.0, 'calcium_mg': 1000.0, 'vitamin_a_mcg': 700.0, 'zinc_mg': 8.0}
+        {'iron_mg': 18.0, 'calcium_mg': 1000.0, 'potassium_mg': 2600.0, 'zinc_mg': 8.0}
         >>> calculate_micronutrients("female", 55)
-        {'iron_mg': 8.0, 'calcium_mg': 1200.0, 'vitamin_a_mcg': 700.0, 'zinc_mg': 8.0}
+        {'iron_mg': 8.0, 'calcium_mg': 1200.0, 'potassium_mg': 2600.0, 'zinc_mg': 8.0}
     """
     if gender == "male":
         micros = {
             "iron_mg": 8.0,
             "calcium_mg": 1200.0 if age >= 51 else 1000.0,
-            "vitamin_a_mcg": 900.0,
+            "potassium_mg": 3400.0,
             "zinc_mg": 11.0
         }
     else:  # female
         micros = {
             "iron_mg": 8.0 if age >= 51 else 18.0,  # Post-menopause vs menstruating
             "calcium_mg": 1200.0 if age >= 51 else 1000.0,
-            "vitamin_a_mcg": 700.0,
+            "potassium_mg": 2600.0,
             "zinc_mg": 8.0
         }
 
@@ -560,7 +561,7 @@ def calculate_user_rdv_v2(user_profile: Dict) -> Dict:
                 "fat": 66.8,
                 "iron": 8.0,
                 "calcium": 1000.0,
-                "vitamin_a": 900.0,
+                "potassium": 900.0,
                 "zinc": 11.0
             },
             "weight_projection": {  # Only if target_weight provided
@@ -627,7 +628,7 @@ def calculate_user_rdv_v2(user_profile: Dict) -> Dict:
         "fat": macros["fat_g"],
         "iron": micros["iron_mg"],
         "calcium": micros["calcium_mg"],
-        "vitamin_a": micros["vitamin_a_mcg"],
+        "potassium": micros["potassium_mg"],
         "zinc": micros["zinc_mg"]
     }
 
@@ -704,7 +705,7 @@ if __name__ == "__main__":
         "fat": 65,
         "iron": 6.5,      # Low
         "calcium": 650,   # Low
-        "vitamin_a": 500, # Low
+        "potassium": 500, # Low
         "zinc": 9.5,
     }
     gaps = get_nutrient_gap_priority(current_intake, rdv1)

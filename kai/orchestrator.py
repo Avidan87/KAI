@@ -172,7 +172,7 @@ async def handle_user_request(
                         "fat": food.total_nutrients.fat,
                         "iron": food.total_nutrients.iron,
                         "calcium": food.total_nutrients.calcium,
-                        "vitamin_a": food.total_nutrients.vitamin_a,
+                        "potassium": food.total_nutrients.potassium,
                         "zinc": food.total_nutrients.zinc,
                         "confidence": food.similarity_score,
                     })
@@ -205,6 +205,7 @@ async def handle_user_request(
                     # Handle stats update result
                     if isinstance(updated_stats, Exception):
                         logger.error(f"Stats update error (non-fatal): {updated_stats}")
+                        updated_stats = None  # Set to None if error
                     else:
                         logger.info(f"   → Updated user stats: {updated_stats.get('total_meals_logged', 0)} meals, {updated_stats.get('current_logging_streak', 0)} day streak")
 
@@ -220,15 +221,18 @@ async def handle_user_request(
 
                 except Exception as db_error:
                     logger.error(f"Database operations error: {db_error}")
+                    updated_stats = None
                     daily_totals = None
                     health_profile = None
 
             except Exception as db_error:
                 logger.error(f"Database error: {db_error}")
                 # Continue without database (don't fail the request)
+                updated_stats = None
                 daily_totals = None
                 health_profile = None
         else:
+            updated_stats = None
             daily_totals = None
             health_profile = None
 
@@ -269,6 +273,14 @@ async def handle_user_request(
         if daily_totals:
             response["daily_totals"] = daily_totals
 
+        # Add user stats if available (includes streak data!)
+        if updated_stats:
+            response["user_stats"] = {
+                "total_meals_logged": updated_stats.get("total_meals_logged", 0),
+                "current_logging_streak": updated_stats.get("current_logging_streak", 0),
+                "learning_phase_complete": updated_stats.get("learning_phase_complete", False),
+            }
+
         return response
 
     elif workflow == "nutrition_query":
@@ -297,7 +309,7 @@ async def handle_user_request(
                 total_fat=0.0,
                 total_iron=0.0,
                 total_calcium=0.0,
-                total_vitamin_a=0.0,
+                total_potassium=0.0,
                 total_zinc=0.0,
                 query_interpretation=user_message,
                 sources_used=[],
@@ -371,7 +383,7 @@ async def handle_user_request(
                     total_fat=0.0,
                     total_iron=0.0,
                     total_calcium=0.0,
-                    total_vitamin_a=0.0,
+                    total_potassium=0.0,
                     total_zinc=0.0,
                     query_interpretation=user_message,
                     sources_used=[],
@@ -392,7 +404,7 @@ async def handle_user_request(
                     total_fat=0.0,
                     total_iron=0.0,
                     total_calcium=0.0,
-                    total_vitamin_a=0.0,
+                    total_potassium=0.0,
                     total_zinc=0.0,
                     query_interpretation=user_message,
                     sources_used=[],

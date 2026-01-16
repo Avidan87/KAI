@@ -204,7 +204,7 @@ async def update_food_frequency(
     fat: float = 0,
     iron: float = 0,
     calcium: float = 0,
-    vitamin_a: float = 0,
+    potassium: float = 0,
     zinc: float = 0,
 ) -> None:
     """
@@ -220,7 +220,7 @@ async def update_food_frequency(
         fat: Fat content in this serving
         iron: Iron content in this serving
         calcium: Calcium content in this serving
-        vitamin_a: Vitamin A content in this serving
+        potassium: Vitamin A content in this serving
         zinc: Zinc content in this serving
     """
     today = datetime.now().date().isoformat()
@@ -231,7 +231,7 @@ async def update_food_frequency(
             SELECT count_7d, count_total,
                    avg_calories_per_serving, avg_protein_per_serving, avg_carbs_per_serving,
                    avg_fat_per_serving, avg_iron_per_serving, avg_calcium_per_serving,
-                   avg_vitamin_a_per_serving, avg_zinc_per_serving
+                   avg_potassium_per_serving, avg_zinc_per_serving
             FROM user_food_frequency
             WHERE user_id = ? AND food_name = ?
         """, (user_id, food_name))
@@ -250,7 +250,7 @@ async def update_food_frequency(
             avg_fat_new = (row[5] * row[1] + fat) / count_total
             avg_iron_new = (row[6] * row[1] + iron) / count_total
             avg_calcium_new = (row[7] * row[1] + calcium) / count_total
-            avg_vitamin_a_new = (row[8] * row[1] + vitamin_a) / count_total
+            avg_potassium_new = (row[8] * row[1] + potassium) / count_total
             avg_zinc_new = (row[9] * row[1] + zinc) / count_total
 
             await db.execute("""
@@ -264,11 +264,11 @@ async def update_food_frequency(
                     avg_fat_per_serving = ?,
                     avg_iron_per_serving = ?,
                     avg_calcium_per_serving = ?,
-                    avg_vitamin_a_per_serving = ?,
+                    avg_potassium_per_serving = ?,
                     avg_zinc_per_serving = ?
                 WHERE user_id = ? AND food_name = ?
             """, (today, avg_calories_new, avg_protein_new, avg_carbs_new, avg_fat_new,
-                  avg_iron_new, avg_calcium_new, avg_vitamin_a_new, avg_zinc_new,
+                  avg_iron_new, avg_calcium_new, avg_potassium_new, avg_zinc_new,
                   user_id, food_name))
 
         else:
@@ -278,12 +278,12 @@ async def update_food_frequency(
                     user_id, food_name, count_7d, count_total, last_eaten_date,
                     avg_calories_per_serving, avg_protein_per_serving, avg_carbs_per_serving,
                     avg_fat_per_serving, avg_iron_per_serving, avg_calcium_per_serving,
-                    avg_vitamin_a_per_serving, avg_zinc_per_serving,
+                    avg_potassium_per_serving, avg_zinc_per_serving,
                     food_category
                 )
                 VALUES (?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (user_id, food_name, today, calories, protein, carbs, fat, iron,
-                  calcium, vitamin_a, zinc, food_category))
+                  calcium, potassium, zinc, food_category))
 
         await db.commit()
 
