@@ -6,8 +6,11 @@ Auth:
 - POST /api/v1/auth/signup              # Sign up new user, get JWT token
 - POST /api/v1/auth/login               # Login existing user, get JWT token
 
+Chat:
+- POST /api/v1/chat                     # Chat with KAI (nutrition questions, progress, feedback)
+
 Food Logging:
-- POST /api/v1/food-logging-upload      # Full pipeline: Vision → Knowledge → Coaching (FILE UPLOAD)
+- POST /api/v1/food-logging-upload      # Vision → Knowledge → Save (returns facts, feedback in chat)
 
 Meals:
 - POST /api/v1/meals/log                # Save meal to database
@@ -33,6 +36,8 @@ import base64
 logger = logging.getLogger(__name__)
 
 from kai.models.agent_models import (
+    ChatRequest,
+    ChatResponse,
     FoodLoggingResponse,
     KnowledgeResult,
     LogMealRequest,
@@ -42,6 +47,7 @@ from kai.models.agent_models import (
     UpdateUserProfileRequest,
     UserStatsResponse,
 )
+from kai.agents.chat_agent import get_chat_agent
 from kai.orchestrator import handle_user_request
 from kai.auth import create_access_token, get_current_user_id
 from kai.database import (
@@ -170,6 +176,45 @@ async def login(email: str = Form(...)):
 
 
 # ============================================================================
+# Chat Endpoints
+# ============================================================================
+
+@app.post("/api/v1/chat", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Chat with KAI - your Nigerian nutrition assistant.
+
+    Use for:
+    - Nutrition questions ("What foods are high in iron?")
+    - Progress checks ("How am I doing today?")
+    - Meal feedback ("How was my last meal?")
+    - General health questions
+    """
+    start = time.time()
+    try:
+        chat_agent = get_chat_agent()
+
+        result = await chat_agent.chat(
+            user_id=user_id,
+            message=request.message,
+            conversation_history=request.conversation_history,
+        )
+
+        return ChatResponse(
+            success=result.get("success", True),
+            message=result.get("message", ""),
+            suggestions=result.get("suggestions", []),
+            processing_time_ms=int((time.time() - start) * 1000),
+        )
+    except Exception as e:
+        logger.error(f"❌ Chat failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+
+# ============================================================================
 # Food Logging Endpoints
 # ============================================================================
 
@@ -177,12 +222,17 @@ async def login(email: str = Form(...)):
 async def food_logging_upload(
     image: UploadFile = File(...),
     user_description: str = Form(None),
-    user_id: str = Depends(get_current_user_id),  # Extract from JWT token
+    user_id: str = Depends(get_current_user_id),
 ):
-    """Food logging with direct file upload (Full pipeline: Vision → Knowledge → Coaching)"""
+    """
+    Food logging with image upload.
+
+    Pipeline: Vision → Knowledge → Save to DB
+    Returns nutrition facts only. For feedback, use /chat endpoint.
+    """
     start = time.time()
     try:
-        # Read image file and convert to base64
+        # Read image and convert to base64
         image_bytes = await image.read()
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
@@ -196,7 +246,7 @@ async def food_logging_upload(
 
         knowledge: KnowledgeResult | None = result.get("nutrition")
 
-        # Extract ALL 8 NUTRIENTS from knowledge result
+        # Extract nutrients
         total_calories = getattr(knowledge, "total_calories", 0.0) if knowledge else 0.0
         total_protein = getattr(knowledge, "total_protein", 0.0) if knowledge else 0.0
         total_carbohydrates = getattr(knowledge, "total_carbohydrates", 0.0) if knowledge else 0.0
@@ -208,12 +258,10 @@ async def food_logging_upload(
 
         return FoodLoggingResponse(
             success=True,
-            message="Meal analyzed",
+            message="Meal logged! Ask me in chat for feedback.",
             detected_foods=result.get("vision").detected_foods if result.get("vision") else [],
             nutrition_data=knowledge,
-            coaching=result.get("coaching"),
             depth_estimation_used=result.get('vision').depth_estimation_used if result.get('vision') else False,
-            # Return ALL 8 nutrients
             total_calories=total_calories,
             total_protein=total_protein,
             total_carbohydrates=total_carbohydrates,
@@ -222,13 +270,12 @@ async def food_logging_upload(
             total_calcium=total_calcium,
             total_potassium=total_potassium,
             total_zinc=total_zinc,
+            meal_id=result.get("meal_id"),
             processing_time_ms=int((time.time() - start) * 1000),
-            workflow_path=result.get("workflow", "food_logging"),
         )
     except Exception as e:
-        # Log full error traceback for debugging
         error_traceback = traceback.format_exc()
-        logger.error(f"❌ Food logging upload failed: {str(e)}\n{error_traceback}")
+        logger.error(f"❌ Food logging failed: {str(e)}\n{error_traceback}")
         raise HTTPException(status_code=500, detail=f"Food logging failed: {str(e)}")
 
 

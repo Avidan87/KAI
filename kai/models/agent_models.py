@@ -12,11 +12,29 @@ from pydantic import BaseModel, Field, ConfigDict
 # Request Models
 # ============================================================================
 
+class ChatRequest(BaseModel):
+    """Chat request - user_id extracted from JWT token"""
+    message: str
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+
+
 class NutritionQueryRequest(BaseModel):
     """Specific nutrition information query"""
     user_id: str
     query: str
     food_name: Optional[str] = None
+
+
+# ============================================================================
+# Response Models
+# ============================================================================
+
+class ChatResponse(BaseModel):
+    """Chat response from KAI"""
+    success: bool
+    message: str
+    suggestions: List[str] = Field(default_factory=list)
+    processing_time_ms: int = 0
 
 
 # ============================================================================
@@ -157,14 +175,13 @@ class CoachingResult(BaseModel):
 # ============================================================================
 
 class FoodLoggingResponse(BaseModel):
-    """Complete response for food logging workflow"""
+    """Response for food logging - just the facts, no coaching"""
     success: bool
     message: str
     detected_foods: List[DetectedFood] = Field(default_factory=list)
     nutrition_data: Optional[KnowledgeResult] = None
-    coaching: Optional[CoachingResult] = None
-    depth_estimation_used: bool = False  # True if depth estimation used for portion estimation, False if fallback
-    # ALL 8 NUTRIENTS - KAI is proficient in tracking all nutrients
+    depth_estimation_used: bool = False
+    # ALL 8 NUTRIENTS
     total_calories: float = 0.0
     total_protein: float = 0.0
     total_carbohydrates: float = 0.0
@@ -173,8 +190,8 @@ class FoodLoggingResponse(BaseModel):
     total_calcium: float = 0.0
     total_potassium: float = 0.0
     total_zinc: float = 0.0
+    meal_id: Optional[str] = None  # Reference to saved meal
     processing_time_ms: int = 0
-    workflow_path: str = ""
 
 
 # ============================================================================

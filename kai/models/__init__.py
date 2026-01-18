@@ -6,6 +6,7 @@ Pydantic models for API requests/responses and agent communication.
 
 from .agent_models import (
     # Request Models
+    ChatRequest,
     NutritionQueryRequest,
 
     # Agent Result Models
@@ -20,6 +21,7 @@ from .agent_models import (
     CoachingResult,
 
     # Response Models
+    ChatResponse,
     FoodLoggingResponse,
 
     # Shared Context
@@ -28,6 +30,7 @@ from .agent_models import (
 
 __all__ = [
     # Requests
+    "ChatRequest",
     "NutritionQueryRequest",
 
     # Agent Results
@@ -42,6 +45,7 @@ __all__ = [
     "CoachingResult",
 
     # Responses
+    "ChatResponse",
     "FoodLoggingResponse",
 
     # Context
