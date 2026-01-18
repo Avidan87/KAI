@@ -193,7 +193,7 @@ Greetings/general chat:
         self,
         user_id: str,
         message: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List] = None
     ) -> Dict[str, Any]:
         """
         Process a chat message and return response.
@@ -201,7 +201,7 @@ Greetings/general chat:
         Args:
             user_id: User ID for personalized data
             message: User's message
-            conversation_history: Previous messages for context
+            conversation_history: Previous ChatMessage objects for context
 
         Returns:
             Dict with success, message, suggestions
@@ -215,10 +215,14 @@ Greetings/general chat:
             # Add conversation history (last 10)
             if conversation_history:
                 for msg in conversation_history[-10:]:
-                    messages.append({
-                        "role": msg.get("role", "user"),
-                        "content": msg.get("content", "")
-                    })
+                    # Handle both dict and Pydantic model
+                    if hasattr(msg, "role"):
+                        role = msg.role
+                        content = msg.content
+                    else:
+                        role = msg.get("role", "user")
+                        content = msg.get("content", "")
+                    messages.append({"role": role, "content": content})
 
             messages.append({"role": "user", "content": message})
 

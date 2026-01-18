@@ -12,10 +12,28 @@ from pydantic import BaseModel, Field, ConfigDict
 # Request Models
 # ============================================================================
 
+class ChatMessage(BaseModel):
+    """Single message in conversation history"""
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     """Chat request - user_id extracted from JWT token"""
     message: str
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+    conversation_history: List[ChatMessage] = Field(
+        default_factory=list,
+        description="Previous messages for context (optional)"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "message": "What foods are high in iron?",
+                "conversation_history": []
+            }
+        }
+    )
 
 
 class NutritionQueryRequest(BaseModel):
