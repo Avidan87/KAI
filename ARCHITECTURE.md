@@ -93,10 +93,21 @@ Central coordination layer that routes requests through appropriate agents.
 
 #### **Chat Workflow** (no image):
 ```
-1. Triage Agent → Extracts food names from text
-2. Knowledge Agent → Retrieves nutrition data
-3. Coaching Agent → Answers questions, provides advice
+1. Chat Agent receives user message
+2. Intelligent tool selection based on query type:
+   - "How was my last meal?" → analyze_last_meal (Database + RDV analysis)
+   - "What's in jollof rice?" → search_foods (ChromaDB)
+   - "How am I doing?" → get_user_progress (Database)
+   - "My meal history" → get_meal_history (Database)
+3. GPT-4o generates engaging response with emojis and coaching
+4. Returns personalized feedback with suggestions
 ```
+
+**Key Intelligence:**
+- Distinguishes between general food queries (ChromaDB) and logged meal analysis (Database)
+- Adapts coaching style based on learning phase (first 21 meals)
+- Provides RDV-based nutrient gap analysis
+- Celebrates streaks and progress with emoji-rich responses
 
 **Timeout Configuration:**
 - Triage: 30s
@@ -135,10 +146,24 @@ Image → GPT-4o Vision → Detected Foods → SAM 2 Segmentation (if 3+ foods)
   - JSONL data (48 Nigerian foods)
 - **Features:** Semantic search, portion scaling, macro/micro nutrient retrieval
 
-#### **Coaching Agent** (`kai/agents/coaching.py`)
-- **Purpose:** Provide personalized nutrition coaching
-- **Model:** GPT-4o
-- **Features:** Deficiency detection, meal recommendations, culturally-aware advice
+#### **Chat Agent** (`kai/agents/chat_agent.py`)
+- **Purpose:** Handle all user conversations and provide personalized coaching
+- **Model:** GPT-4o with function calling
+- **Features:**
+  - **Intelligent Tool Routing:** Automatically chooses between ChromaDB (general food info) and Database (logged meals)
+  - **Meal Analysis:** RDV-based analysis of logged meals with nutrient gap detection
+  - **Learning Phase Detection:** Adapts coaching based on user progress (first 21 meals)
+  - **Emoji-Rich Responses:** Engaging, friendly communication style
+  - **Multi-nutrient Coaching:** Tracks all 8 nutrients (calories, protein, carbs, fat, iron, calcium, potassium, zinc)
+  - **Progress Tracking:** Daily totals, streaks, weekly trends
+  - **Nigerian Food Context:** Culturally-aware recommendations
+
+**Tools Available:**
+1. `search_foods` - ChromaDB search for general Nigerian food nutrition info
+2. `analyze_last_meal` - Analyze most recent logged meal with RDV-based coaching
+3. `get_user_progress` - Fetch daily/weekly nutrition stats and trends
+4. `get_meal_history` - Retrieve recent meals
+5. `web_search` - Tavily fallback for foods not in database
 
 ---
 
