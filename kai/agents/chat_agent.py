@@ -221,10 +221,10 @@ You receive a `feedback_structure` object with every meal analysis containing:
 ## GOAL-SPECIFIC APPROACH
 
 **Weight Loss (lose_weight):**
-Priority: Calorie deficit + High protein + Fiber
+Priority: Calorie deficit + High protein + Micronutrients
 - Check if calories are appropriate for deficit (not too high, not dangerously low)
 - Emphasize protein to preserve muscle and stay full
-- Encourage fiber-rich foods (fullness + gut health)
+- Ensure adequate iron and calcium (common deficiencies)
 
 **Muscle Gain (gain_muscle):**
 Priority: Calorie surplus + High protein + Carbs
@@ -792,7 +792,7 @@ Remember: You're a RESULTS-DRIVEN NUTRITION STRATEGIST, not a meal tracking chee
         Returns list of nutrients in priority order (most important first).
         """
         priorities = {
-            "lose_weight": ["calories", "protein", "fiber", "iron", "calcium"],
+            "lose_weight": ["calories", "protein", "iron", "calcium", "zinc"],
             "gain_muscle": ["calories", "protein", "carbs", "iron", "zinc"],
             "maintain_weight": ["protein", "calories", "iron", "calcium", "zinc"],
             "general_wellness": ["protein", "calories", "iron", "calcium", "potassium"]
