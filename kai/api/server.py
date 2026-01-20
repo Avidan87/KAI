@@ -13,13 +13,12 @@ Food Logging:
 - POST /api/v1/food-logging-upload      # Vision → Knowledge → Save (returns facts, feedback in chat)
 
 Meals:
-- POST /api/v1/meals/log                # Save meal to database
 - GET  /api/v1/meals/history            # Get meal history (user_id from JWT)
 
 Users:
-- GET  /api/v1/users/profile             # Get user profile + health + RDV (user_id from JWT)
-- PUT  /api/v1/users/profile             # Update user profile (user_id from JWT)
-- GET  /api/v1/users/stats               # Get daily nutrition stats (user_id from JWT)
+- GET  /api/v1/users/profile            # Get user profile + health + RDV (user_id from JWT)
+- PUT  /api/v1/users/health-profile     # Update health profile with BMR/TDEE calculations
+- GET  /api/v1/users/stats              # Get daily nutrition stats (user_id from JWT)
 """
 
 import time
@@ -40,11 +39,8 @@ from kai.models.agent_models import (
     ChatResponse,
     FoodLoggingResponse,
     KnowledgeResult,
-    LogMealRequest,
-    LogMealResponse,
     MealHistoryResponse,
     UserProfileResponse,
-    UpdateUserProfileRequest,
     UserStatsResponse,
 )
 from kai.agents.chat_agent import get_chat_agent
@@ -55,10 +51,8 @@ from kai.database import (
     get_user,
     create_user,
     get_user_by_email,
-    update_user,
     update_user_health,
     get_user_health_profile,
-    log_meal as db_log_meal,
     get_user_meals,
     get_daily_nutrition_totals,
 )
@@ -283,48 +277,6 @@ async def food_logging_upload(
 # Meal Endpoints
 # ============================================================================
 
-@app.post("/api/v1/meals/log", response_model=LogMealResponse)
-async def log_meal(
-    request: LogMealRequest,
-    user_id: str = Depends(get_current_user_id),  # Extract from JWT token
-):
-    """Save a meal to the database"""
-    start = time.time()
-    try:
-        # Ensure user exists
-        user = await get_user(user_id)
-        if not user:
-            # Create user if doesn't exist
-            await create_user(user_id=user_id)
-
-        # Save meal to database
-        meal_result = await db_log_meal(
-            user_id=user_id,
-            meal_type=request.meal_type,
-            foods=request.foods,
-            meal_date=request.meal_date,
-            image_url=request.image_url,
-            user_description=request.user_description,
-        )
-
-        # Get updated daily totals
-        daily_totals = await get_daily_nutrition_totals(user_id)
-
-        return LogMealResponse(
-            success=True,
-            message="Meal logged successfully",
-            meal_id=meal_result["meal_id"],
-            meal_date=meal_result["meal_date"],
-            meal_time=meal_result["meal_time"],
-            foods_count=meal_result["foods_count"],
-            totals=meal_result["totals"],
-            daily_totals=daily_totals,
-            processing_time_ms=int((time.time() - start) * 1000),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/v1/meals/history", response_model=MealHistoryResponse)
 async def get_meal_history(
     limit: int = 20,
@@ -390,74 +342,6 @@ async def get_user_profile(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.put("/api/v1/users/profile", response_model=UserProfileResponse)
-async def update_user_profile_endpoint(
-    request: UpdateUserProfileRequest,
-    user_id: str = Depends(get_current_user_id),  # Extract from JWT token
-):
-    """
-    Update user profile and health information.
-
-    For complete health profile updates (with BMR/TDEE calculations),
-    use /api/v1/users/health-profile endpoint instead.
-    """
-    start = time.time()
-    try:
-        # Update user basic info
-        if any([request.email, request.name, request.gender, request.age]):
-            await update_user(
-                user_id=user_id,
-                email=request.email,
-                name=request.name,
-                gender=request.gender,
-                age=request.age,
-            )
-
-        # Update health info
-        if any([
-            request.weight_kg,
-            request.height_cm,
-            request.activity_level,
-            request.health_goals,
-            request.dietary_restrictions,
-        ]):
-            await update_user_health(
-                user_id=user_id,
-                weight_kg=request.weight_kg,
-                height_cm=request.height_cm,
-                activity_level=request.activity_level,
-                health_goals=request.health_goals,
-                dietary_restrictions=request.dietary_restrictions,
-            )
-
-        # Return updated profile
-        profile = await get_user_health_profile(user_id)
-
-        return UserProfileResponse(
-            success=True,
-            message="User profile updated",
-            user_id=profile["user_id"],
-            email=profile.get("email"),
-            name=profile.get("name"),
-            gender=profile["gender"],
-            age=profile["age"],
-            weight_kg=profile.get("weight_kg"),
-            height_cm=profile.get("height_cm"),
-            activity_level=profile.get("activity_level"),
-            health_goals=profile.get("health_goals"),
-            dietary_restrictions=profile.get("dietary_restrictions"),
-            target_weight_kg=profile.get("target_weight_kg"),
-            calculated_calorie_goal=profile.get("calculated_calorie_goal"),
-            custom_calorie_goal=profile.get("custom_calorie_goal"),
-            active_calorie_goal=profile.get("active_calorie_goal"),
-            profile_complete=profile.get("profile_complete", False),
-            rdv=profile["rdv"],
-            processing_time_ms=int((time.time() - start) * 1000),
-        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
