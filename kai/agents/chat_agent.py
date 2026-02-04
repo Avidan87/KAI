@@ -538,7 +538,7 @@ Keep it 2-4 sentences with emojis. Sound like you're recommending a meal to a fr
                 tools=self.tools,
                 tool_choice="auto",
                 temperature=0.7,
-                max_tokens=1000
+                max_completion_tokens=1000
             )
 
             assistant_message = response.choices[0].message
@@ -564,7 +564,7 @@ Keep it 2-4 sentences with emojis. Sound like you're recommending a meal to a fr
                     model=self.model,
                     messages=messages,
                     temperature=0.7,
-                    max_tokens=1000
+                    max_completion_tokens=1000
                 )
                 final_message = final_response.choices[0].message.content
             else:

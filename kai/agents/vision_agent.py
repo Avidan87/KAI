@@ -233,7 +233,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.2,
-                max_tokens=1500
+                max_completion_tokens=1500
             )
 
             # Log token usage
@@ -508,7 +508,7 @@ Be specific about Nigerian dishes, not generic descriptions!"""
             ],
             response_format={"type": "json_object"},
             temperature=0.2,  # Low temperature for consistent detection
-            max_tokens=1500
+            max_completion_tokens=1500
         )
 
         # Log token usage
