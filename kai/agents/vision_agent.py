@@ -67,7 +67,7 @@ class VisionAgent:
             raise ValueError("OPENAI_API_KEY not found")
 
         self.client = AsyncOpenAI(api_key=api_key)
-        self.model = "gpt-5"  # Vision-capable model
+        self.model = "gpt-4o"  # Vision-capable model
         self.max_image_size = 2048  # Max dimension for processing
 
         # Nigerian food knowledge (from our enriched database)
@@ -232,7 +232,8 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                     }
                 ],
                 response_format={"type": "json_object"},
-                max_completion_tokens=1500
+                temperature=0.2,
+                max_tokens=1500
             )
 
             # Log token usage
@@ -506,7 +507,8 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                 }
             ],
             response_format={"type": "json_object"},
-            max_completion_tokens=1500
+            temperature=0.2,
+            max_tokens=1500
         )
 
         # Log token usage

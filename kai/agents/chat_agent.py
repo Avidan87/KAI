@@ -61,7 +61,7 @@ class ChatAgent:
             raise ValueError("OPENAI_API_KEY not found")
 
         self.client = AsyncOpenAI(api_key=api_key)
-        self.model = "gpt-5"
+        self.model = "gpt-4o"
 
         # Initialize ChromaDB
         try:
@@ -537,7 +537,8 @@ Keep it 2-4 sentences with emojis. Sound like you're recommending a meal to a fr
                 messages=messages,
                 tools=self.tools,
                 tool_choice="auto",
-                max_completion_tokens=1000
+                temperature=0.7,
+                max_tokens=1000
             )
 
             assistant_message = response.choices[0].message
@@ -562,7 +563,8 @@ Keep it 2-4 sentences with emojis. Sound like you're recommending a meal to a fr
                 final_response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    max_completion_tokens=1000
+                    temperature=0.7,
+                    max_tokens=1000
                 )
                 final_message = final_response.choices[0].message.content
             else:
