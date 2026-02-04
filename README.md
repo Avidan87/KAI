@@ -17,339 +17,242 @@ pinned: false
 
 ### 📸 Camera-First Meal Logging with SAM 2
 - **Instant food recognition:** Snap a meal photo, get Nigerian dishes detected instantly
-- **Pixel-perfect segmentation:** SAM 2 (Meta) segments overlapping foods accurately (60% faster than previous system)
-- **Smart portion estimation:** Depth Anything V2 AI estimates grams from depth maps
-- **Automatic nutrition breakdown:** Tracks 8 nutrients - calories, protein, fat, carbs, iron, calcium, vitamin A, zinc
+- **Pixel-perfect segmentation:** SAM 2 (Meta) segments overlapping foods accurately
+- **Smart portion estimation:** MiDaS depth estimation via Railway MCP server
+- **Automatic nutrition breakdown:** Tracks **16 nutrients** — calories, protein, fat, carbs, fiber, iron, calcium, zinc, potassium, sodium, magnesium, vitamin A, vitamin C, vitamin D, vitamin B12, folate
 - **Portion safety caps:** Max 300g/food, 650g/meal (research-backed Nigerian portions)
 
 ### 🇳🇬 Culturally-Aware Nigerian Nutrition
-- **50+ Nigerian foods recognized:** Jollof Rice, Pounded Yam, Fufu, Egusi Soup, Suya, Moi Moi, Akara, Eba, Efo Riro, Ogbono Soup, Okra Soup, Pepper Soup, Amala, Fried Plantain, and more
+- **75 Nigerian foods** in the knowledge base with full nutrition data
+- **Semantic search:** Handles spelling variations, local names, and aliases via pgvector embeddings
 - **Regional variations:** Understands local names, cooking methods, and food pairings
-- **Budget-adapted options:** Affordable, mid-tier, and premium food choices
 - **Cultural context:** Traditional meal combinations and preparation methods
 
-### 👥 Personalized Health Coaching for All Nigerians
-- **Gender-specific guidance:** RDV calculations for men and women
-- **Age-adjusted recommendations:** Optimized for 19-50 and 51+ age groups
+### 👥 Personalized Health Coaching — 8 Health Goals
+- **Goal-driven nutrition plans** with 6-8 priority nutrients per goal:
+  - 🏋️ Lose Weight | 💪 Gain Muscle | ⚖️ Maintain Weight | 🌿 General Wellness
+  - 🤰 Pregnancy | ❤️ Heart Health | ⚡ Energy Boost | 🦴 Bone Health
+- **Gender-specific & age-adjusted** RDV calculations (BMR/TDEE-based)
 - **Activity-level awareness:** Sedentary to very active lifestyle adjustments
-- **Multi-nutrient tracking:** Monitors all 8 key nutrients with gap analysis
 - **Learning phase:** First 7 days or 21 meals for baseline establishment
-- **Dynamic feedback:** "Great job logging your Jollof Rice and plantain!" with actual food mentions
-- **Health goals:** Weight loss, muscle gain, maintenance, general wellness
-- **Streaks & trends:** Week-over-week progress tracking
+- **Streaks & trends:** Week-over-week progress tracking with trend analysis
+- **Dynamic feedback:** Personalized coaching with actual food mentions
 
 ---
 
-## 🏗️ System Architecture & Workflows
+## 🏗️ Deployment Architecture
 
-### 🤖 Multi-Agent Pipeline (4 Core Agents)
+```
+📱 Flutter App (Frontend)
+     │
+     ▼
+🤗 HF Spaces (KAI FastAPI Backend + SAM 2)
+     │         │         │
+     ▼         ▼         ▼
+  🗄️ Supabase   🚂 Railway   🤖 OpenAI
+  (PostgreSQL    (MiDaS MCP   (GPT-4o,
+   + pgvector)    Depth Est.)   Embeddings)
+```
 
-**1. Triage Agent (Router):**
-- Model: GPT-4o-mini (cost-efficient)
-- Routes user input to: `food_logging`, `nutrition_query`, `health_coaching`, or `general_chat`
-- Optimized: Image uploads skip triage and go directly to vision agent
+| Service | Platform | Purpose |
+|---|---|---|
+| 🤗 KAI Backend | HF Spaces (Docker, CPU) | FastAPI + SAM 2 inference |
+| 🗄️ Database | Supabase (PostgreSQL + pgvector) | Users, meals, food embeddings |
+| 🚂 MiDaS MCP | Railway | Depth estimation for portion sizing |
+| 🤖 AI Models | OpenAI API | GPT-4o, text-embedding-3-large |
 
-**2. Vision Agent (Food Detection):**
-- Model: GPT-4o with vision capabilities
-- **NEW (Jan 2026):** Upgraded with SAM 2 segmentation
-  - Replaces Florence-2 (450 lines removed)
-  - Pixel-perfect food masks (no bbox overlap issues)
-  - 60% faster (1-2s vs 3-4s)
-  - 40% more accurate (15-20% MAPE vs 25-30%)
-- Handles overlapping Nigerian foods on same plate
-- Outputs: Food names, portions, confidence scores, ingredients, cooking methods
+---
 
-**3. Knowledge Agent (RAG System):**
-- Model: GPT-4o-mini with ChromaDB vector search
+## 🤖 Multi-Agent Pipeline
+
+### Agents
+
+**1. Triage Agent** — Routes user input to the correct workflow
+- Model: GPT-4o-mini
+- Routes to: `food_logging`, `nutrition_query`, `health_coaching`, or `general_chat`
+- Image uploads skip triage and go directly to vision
+
+**2. Vision Agent** — Detects foods and estimates portions from images
+- Model: GPT-4o with vision
+- SAM 2 segmentation for 3+ foods on a plate
+- MiDaS MCP for depth-based portion estimation
+
+**3. Knowledge Agent** — Retrieves nutrition data via RAG
+- Model: GPT-4o-mini with Supabase pgvector search
 - Embeddings: OpenAI text-embedding-3-large (3072 dimensions)
-- 50+ enriched Nigerian foods with semantic search
-- Retrieves precise nutrition data for all 8 nutrients
-- Tools: `search_nigerian_foods`, `get_foods_by_nutrient`
+- 75 Nigerian foods with 16 nutrients each
 
-**4. Coaching Agent (Personalization):**
-- Model: GPT-4o for dynamic coaching
-- Features:
-  - Learning phase detection (first 7 days)
-  - Week-over-week trend analysis
-  - Multi-nutrient gap identification
-  - Dynamic meal combo suggestions via RAG
-  - Culturally-aware motivational messaging
-- Tools: `generate_nutrition_insights`, `suggest_meals`
+**4. Chat Agent** — Handles all conversations and personalized coaching
+- Model: GPT-4o with function calling
+- Tools: `search_foods`, `analyze_last_meal`, `get_user_progress`, `get_meal_history`, `suggest_meal`, `web_search`
+- RDV-based nutrient gap analysis
+- Learning phase detection (first 21 meals)
 
----
-
-### ⚡ Complete Food Logging Workflow
+### Food Logging Workflow
 
 ```
 User uploads photo
   ↓
 Vision Agent (GPT-4o detects Nigerian foods)
   ↓
-SAM 2 (generates pixel-perfect masks for each food)
+SAM 2 (pixel-perfect masks for 3+ foods)
   ↓
-Depth Anything V2 MCP (estimates portions from depth maps)
+MiDaS MCP (depth-based portion estimation)
   ↓
-Knowledge Agent (retrieves nutrition via ChromaDB RAG)
+Knowledge Agent (nutrition lookup via pgvector)
   ↓
-Coaching Agent (generates personalized feedback)
+Save to Supabase (meal + foods + daily totals)
   ↓
-Response: Detected foods + nutrition + coaching + tracking flags
+Response: Detected foods + priority nutrients
 ```
-
-**Response includes:**
-- Food names with Nigerian aliases
-- Portion estimates in grams
-- Complete 8-nutrient breakdown
-- `depth_estimation_used` flag (tracks MCP server usage)
-- Personalized coaching with actual food mentions
-- Rolling averages, streaks, actionable next steps
-
-**Other Workflows:**
-- **Nutrition Query:** "How much iron in fufu?" → Knowledge Agent → Coaching Agent
-- **Health Coaching:** "What should I eat for anemia?" → Coaching Agent (with Tavily web search)
-- **General Chat:** Greetings and casual conversation
 
 ---
 
 ## 🛠️ Technology Stack
 
-### Backend & AI
-- **Framework:** Python 3.10+, FastAPI (async), JWT authentication
-- **AI Models:**
-  - GPT-4o (vision, coaching)
-  - GPT-4o-mini (routing, knowledge)
-  - OpenAI text-embedding-3-large (3072-dim embeddings)
-- **Computer Vision:**
-  - **SAM 2** (Meta's Segment Anything Model 2) - small variant (46M params)
-  - **Depth Anything V2** (Railway MCP server) - state-of-the-art monocular depth estimation
-  - OpenCV, Pillow, NumPy, Torch
-- **RAG Pipeline:** ChromaDB, LangChain, sentence-transformers
-- **Databases:** SQLite (async via aiosqlite) or PostgreSQL
-- **MCP Servers:**
-  - Depth estimation (Depth Anything V2)
-  - Tavily web search (Nigerian health context)
-
-### Deployment
-- **Containerization:** Docker, Railway
-- **Configuration:** Environment variables (.env)
-- **API:** RESTful with CORS enabled
-
----
-
-## 🍲 Comprehensive Nigerian Food Coverage
-
-**Staples:** Jollof Rice, Fried Rice, Rice and Stew, Eba, Fufu, Pounded Yam, Amala
-
-**Soups:** Egusi Soup, Ogbono Soup, Okra Soup, Efo Riro, Pepper Soup, Edikang Ikong
-
-**Proteins:** Suya, Fried/Grilled Chicken, Fried/Grilled Fish
-
-**Sides:** Fried Plantain (Dodo), Moi Moi, Akara, Beans and Stew, Ewa Agoyin
-
-**All detected foods shown in personalized feedback!**
-
----
-
-## 🔬 Advanced Features
-
-### SAM 2 Food Segmentation (January 2026 Upgrade)
-- **Pixel-level accuracy:** No more bbox overlap (previous 214% overlap issue eliminated)
-- **Automatic mask generation:** No prompts needed
-- **Handles overlapping foods:** Jollof rice + stew on same plate perfectly separated
-- **Vision Transformer architecture:** 1024+ dimensional features per pixel
-- **Model variants available:** tiny (0.5s), small (1-2s, default), base (3-4s), large (8-10s)
-
-### Depth Estimation MCP Server
-- **Model:** Depth Anything V2 Small (24.8M params)
-- **Features:**
-  - Batch processing (multiple foods per API call)
-  - Image hash caching (SHA-256, LRU cache with 100 entries)
-  - Railway-hosted with 120s timeout for cold starts
-  - Reference object detection (plate, spoon, hand)
-- **Tracking:** `depth_estimation_used` flag in all responses
-
-### Personalized RDV Calculator
-- **Gender-specific:** Different recommendations for men and women
-- **Age-adjusted:** 19-50 and 51+ categories
-- **Activity multipliers:** Sedentary (1.2x) to Very Active (1.9x)
-- **All 8 nutrients:** Calories, protein, fat, carbs, iron, calcium, vitamin A, zinc
-- *Future:* Pregnancy, lactation, anemia adjustments
-
-### ChromaDB RAG System
-- **Vector search:** Semantic similarity for Nigerian food queries
-- **Rich metadata:** All 8 nutrients, portion limits, price tier, dietary flags
-- **Comprehensive text:** Name + aliases + description + benefits + cultural significance
-- **Persistent storage:** `chromadb_data/` directory
-
----
-
-## 📦 Installation & Setup
-
-### 1. Clone Repository
-```bash
-git clone <repository-url>
-cd KAI
-```
-
-### 2. Install Python Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Install SAM 2 (Food Segmentation)
-```bash
-# Windows
-cd scripts
-install_sam2.bat
-
-# Linux/Mac
-cd scripts
-chmod +x install_sam2.sh
-./install_sam2.sh
-```
-
-This will:
-- Install SAM 2 package from GitHub
-- Download sam2_hiera_small.pt checkpoint (~176MB)
-- Verify installation
-
-### 4. Environment Variables
-Create `.env` file:
-```env
-# OpenAI API
-OPENAI_API_KEY=your_openai_api_key
-
-# Web Search (optional)
-TAVILY_API_KEY=your_tavily_api_key
-
-# Authentication
-JWT_SECRET_KEY=your_jwt_secret_key
-
-# Database
-DATABASE_URL=sqlite:///kai_database.db  # Or PostgreSQL URL
-
-# MCP Servers (optional - fallback enabled)
-DEPTH_ESTIMATION_URL=your_railway_depth_server_url
-```
-
-### 5. Initialize Database
-```bash
-python -m kai.database.db_setup
-# ChromaDB knowledge base initializes automatically
-```
-
-### 6. Run API Server
-```bash
-uvicorn kai.api.server:app --reload
-# API available at http://localhost:8000
-```
-
-### 7. API Documentation
-Visit http://localhost:8000/docs for interactive API documentation (Swagger UI)
+| Category | Technology |
+|---|---|
+| **Backend** | Python 3.11, FastAPI, Uvicorn |
+| **AI Models** | GPT-4o, GPT-4o-mini, text-embedding-3-large |
+| **Food Segmentation** | SAM 2 Hiera Small (46M params, CPU) |
+| **Depth Estimation** | MiDaS (via Railway MCP server) |
+| **Database** | Supabase PostgreSQL + pgvector |
+| **Vector Search** | pgvector (3072-dim OpenAI embeddings) |
+| **Authentication** | JWT (via supabase-py + custom JWT) |
+| **Web Search** | Tavily API (Nigerian health context) |
+| **Deployment** | Docker on HF Spaces |
+| **Image Processing** | OpenCV, Pillow, NumPy, PyTorch |
 
 ---
 
 ## 🚀 API Endpoints
 
-**Base URL:** `/api/v1`
+**Base URL:** `https://av-idan-k-a-i.hf.space/api/v1`
 
 ### Authentication
-- `POST /auth/signup` - Create account (email, name, gender, age)
-- `POST /auth/login` - Login with email
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/auth/signup` | Create account (email, name, gender, age) |
+| POST | `/auth/login` | Login with email, get JWT |
 
 ### Food Logging
-- `POST /food-logging-upload` - Upload meal photo (multipart/form-data)
-  - Returns: detected_foods, nutrition (8 nutrients), coaching, depth_estimation_used
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/food-logging-upload` | Upload meal photo → detect foods → nutrition → save |
 
-### Chat & Queries
-- `POST /chat` - Ask nutrition questions or get coaching
-  - Returns: coaching_message, nutrition_data, follow_up_suggestions, tavily_used
+### Chat
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/chat` | Chat with KAI (nutrition questions, feedback, progress) |
 
-### Meal Management
-- `POST /meals/log` - Save meal to database
-- `GET /meals/history` - Retrieve meal history (paginated)
+### Meals
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/meals/history` | Get meal history (paginated) |
 
 ### User Profile
-- `GET /users/profile` - Get profile + health info + RDV
-- `PUT /users/profile` - Update profile/health settings
-- `GET /users/stats` - Daily nutrition statistics
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/users/profile` | Get profile + health info + RDV |
+| PUT | `/users/health-profile` | Update health profile (weight, height, activity, goals) |
+| GET | `/users/nutrition-plan` | Get goal-driven nutrition plan with priority nutrients |
+| GET | `/users/stats` | Get daily nutrition stats |
 
 ### Health Check
-- `GET /health` - Service health status
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/health` | Service health status |
 
-**Authentication:** All endpoints require `Authorization: Bearer <jwt_token>` header
+**Authentication:** All endpoints (except signup/login/health) require `Authorization: Bearer <jwt_token>` header.
 
 ---
 
-## 📊 Database Schema
+## 📊 Database Schema (Supabase)
 
 ### Tables
-1. **users** - User accounts (UUID, email, name, gender, age)
-2. **user_health** - Health profile (weight, height, activity level, goals, BMR, TDEE)
-3. **meals** - Meal records (type, date, time, image_url, description)
-4. **meal_foods** - Per-food nutrition breakdown (portion_grams, 8 nutrients)
-5. **daily_nutrients** - Daily aggregated nutrition totals
-
-### ChromaDB Collection
-- **nigerian_foods** - 50+ foods with embeddings and metadata
-
----
-
-## 📚 Documentation
-
-- **Migration Guide:** `/docs/FOODSAM_MIGRATION.md` - SAM 2 upgrade details
-- **Coaching Design:** `/docs/COACHING_API_GUIDE.md` - Personalization features
-- **Dynamic Coaching:** `/docs/DYNAMIC_COACHING_DESIGN.md` - Architecture overview
+1. **users** — User accounts (UUID, email, name, gender, age)
+2. **user_health** — Health profile (weight, height, activity, goals, BMR/TDEE calorie calculations)
+3. **meals** — Meal records (type, date, time, image, description)
+4. **meal_foods** — Per-food nutrition (portion_grams + 16 nutrients)
+5. **daily_nutrients** — Daily aggregated totals (16 nutrients)
+6. **user_nutrition_stats** — Pre-computed stats (streaks, weekly averages, trends)
+7. **user_food_frequency** — Food frequency tracking (7-day + total counts)
+8. **user_recommendation_responses** — Meal recommendation tracking
+9. **nigerian_foods** — Vector table with pgvector embeddings (75 foods, 3072-dim)
 
 ---
 
-## 🎯 Recent Updates (January 2026)
+## 🍲 Nigerian Food Coverage (75 Foods)
 
-### SAM 2 Migration ✅
-- Replaced Florence-2 bounding boxes with SAM 2 pixel-perfect segmentation
-- **Performance:** 60% faster, 40% more accurate
-- **Code:** 450 lines simpler (removed K-Means workarounds)
-- **Result:** No more bbox overlap issues on Nigerian plates
+**Staples:** Jollof Rice, Fried Rice, Rice and Stew, Eba, Fufu, Pounded Yam, Amala, Tuwo Shinkafa, Agege Bread
 
-### Depth Anything V2 Integration ✅
-- State-of-the-art monocular depth estimation
-- 10x faster than ZoeDepth
-- Batch processing for multiple foods
-- Image hash caching for efficiency
+**Soups:** Egusi Soup, Ogbono Soup, Okra Soup, Efo Riro, Pepper Soup, Edikang Ikong, Afang Soup, Banga Soup, Miyan Kuka
 
-### Enhanced Coaching Agent ✅
-- Multi-nutrient tracking (all 8 nutrients)
-- Learning phase coaching (first 7 days)
-- Week-over-week trend analysis
-- Gender-neutral, inclusive messaging
+**Proteins:** Suya, Goat Meat Stew, Fried/Grilled Chicken, Fried/Grilled Fish, Peppered Snail, Nkwobi
+
+**Sides:** Fried Plantain (Dodo), Moi Moi, Akara, Beans and Stew, Ewa Agoyin, Ojojo, Dundun
+
+**Snacks & Drinks:** Puff Puff, Chin Chin, Boli, Zobo, Kunu, Tiger Nut Milk
+
+---
+
+## 📦 Installation & Setup
+
+### Local Development
+
+```bash
+# Clone
+git clone https://github.com/Avidan87/KAI.git
+cd KAI
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install SAM 2
+pip install git+https://github.com/facebookresearch/segment-anything-2.git
+
+# Download SAM 2 model
+mkdir -p models/sam2
+cd models/sam2
+curl -L -O https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_small.pt
+cd ../..
+
+# Set environment variables in .env
+# OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+# SUPABASE_ANON_KEY, JWT_SECRET_KEY, MIDAS_MCP_URL, TAVILY_API_KEY
+
+# Run server
+uvicorn kai.api.server:app --reload --port 8000
+```
+
+### Docker (HF Spaces)
+
+The Dockerfile handles everything automatically:
+- Installs system deps + Python packages + SAM 2
+- Downloads SAM 2 model checkpoint (176MB) at build time
+- Runs FastAPI on port 7860
 
 ---
 
 ## 🔮 Future Enhancements
 
-- **Phase 2:** Update MCP server to accept pixel masks directly (skip bbox conversion)
-- **Phase 3:** Fine-tune SAM 2 on Nigerian food dataset (FoodSAM approach)
-- Pregnancy/lactation/anemia-specific nutrition guidance
+- GPU inference for SAM 2 (60s → 3s)
+- Pass pixel masks directly to MiDaS (skip bbox conversion)
+- Fine-tune SAM 2 on Nigerian food dataset
 - Cost optimization (nutrient per Naira tracking)
-- Historical health trend visualization
-- Offline mode with local SAM 2 inference
+- Offline mode with local inference
+- Multi-language support (Yoruba, Igbo, Hausa)
 
 ---
 
-## 🙏 Credits & Acknowledgments
+## 🙏 Credits
 
-- **Nigerian Nutrition Researchers** - Cultural food knowledge and portion data
-- **OpenAI** - GPT-4o vision, embeddings, and API
-- **Meta AI** - SAM 2 (Segment Anything Model 2)
-- **Depth Anything Team** - State-of-the-art depth estimation
-- **ChromaDB, LangChain, Tavily** - RAG infrastructure
-- **Nigerian Women & Health Advocates** - Feedback and use case validation
-
----
-
-## 📄 License
-
-[Your License Here]
+- **OpenAI** — GPT-4o vision, embeddings, and API
+- **Meta AI** — SAM 2 (Segment Anything Model 2)
+- **MiDaS** — Depth estimation for portion sizing
+- **Supabase** — PostgreSQL + pgvector database
+- **Hugging Face** — Spaces hosting
+- **Railway** — MCP server hosting
 
 ---
 
@@ -359,15 +262,5 @@ Visit http://localhost:8000/docs for interactive API documentation (Swagger UI)
 
 ---
 
-## 🤝 Contributing
-
-Contributions welcome! Please read our contributing guidelines and submit pull requests.
-
-## 📧 Contact
-
-For questions, feedback, or support, please open an issue on GitHub.
-
----
-
-**Version:** 2.0.0 (SAM 2 Integration)
-**Last Updated:** January 2026
+**Version:** 3.0.0 (Supabase + HF Spaces)
+**Last Updated:** February 2026
