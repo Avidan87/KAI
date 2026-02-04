@@ -10,7 +10,7 @@ Automatically updates user nutrition statistics after meal logging:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from kai.database import (
@@ -46,7 +46,8 @@ async def calculate_and_update_user_stats(user_id: str) -> Dict:
     # Get user creation date for account age
     user = await get_user(user_id)
     created_at = datetime.fromisoformat(user["created_at"])
-    account_age_days = (datetime.now() - created_at).days
+    # Use timezone-aware now() to match Supabase's timezone-aware timestamps
+    account_age_days = (datetime.now(timezone.utc) - created_at).days
 
     # Get all user meals
     all_meals = await get_user_meals(user_id, limit=1000)  # Get up to 1000 meals
