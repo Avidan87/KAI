@@ -1,0 +1,10 @@
+# Railway deployment config for KAI monorepo
+[build]
+  dockerfile = "Dockerfile"
+  buildCommand = ""
+  startCommand = "python start_server.py"
+
+[deploy]
+  healthcheckPath = "/health"
+  healthcheckTimeout = 300
+  restartPolicyType = "on_failure"
