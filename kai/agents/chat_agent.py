@@ -61,7 +61,7 @@ class ChatAgent:
             raise ValueError("OPENAI_API_KEY not found")
 
         self.client = AsyncOpenAI(api_key=api_key)
-        self.model = "gpt-4o"
+        self.model = "gpt-5"
 
         # Initialize ChromaDB
         try:

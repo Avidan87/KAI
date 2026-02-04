@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python depth_anything_v2.py:*)"
+    ]
+  }
+}
