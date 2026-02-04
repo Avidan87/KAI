@@ -537,7 +537,6 @@ Keep it 2-4 sentences with emojis. Sound like you're recommending a meal to a fr
                 messages=messages,
                 tools=self.tools,
                 tool_choice="auto",
-                temperature=0.7,
                 max_completion_tokens=1000
             )
 
@@ -563,7 +562,6 @@ Keep it 2-4 sentences with emojis. Sound like you're recommending a meal to a fr
                 final_response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.7,
                     max_completion_tokens=1000
                 )
                 final_message = final_response.choices[0].message.content

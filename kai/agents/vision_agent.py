@@ -232,7 +232,6 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                     }
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.2,
                 max_completion_tokens=1500
             )
 
@@ -507,7 +506,6 @@ Be specific about Nigerian dishes, not generic descriptions!"""
                 }
             ],
             response_format={"type": "json_object"},
-            temperature=0.2,  # Low temperature for consistent detection
             max_completion_tokens=1500
         )
 
