@@ -5,15 +5,41 @@ Uses Supabase Auth for secure password-based authentication.
 Tokens issued by Supabase are verified server-side.
 """
 import logging
+import os
 from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from supabase import create_client, Client
+from dotenv import load_dotenv
 
-from kai.database.db_setup import get_supabase
-
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
+
+# Auth client (uses anon key for auth operations)
+_auth_client: Optional[Client] = None
+
+
+def get_auth_client() -> Client:
+    """
+    Get Supabase client for auth operations.
+    Uses SUPABASE_ANON_KEY if available, falls back to SERVICE_ROLE_KEY.
+    """
+    global _auth_client
+
+    if _auth_client is None:
+        url = os.getenv("SUPABASE_URL")
+        # Prefer anon key for auth, fall back to service role
+        key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+        if not url or not key:
+            raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set")
+
+        _auth_client = create_client(url, key)
+        logger.info("✓ Supabase auth client initialized")
+
+    return _auth_client
 
 
 def sign_up_user(email: str, password: str) -> dict:
@@ -30,7 +56,7 @@ def sign_up_user(email: str, password: str) -> dict:
     Raises:
         ValueError: If signup fails (e.g., email already exists, weak password)
     """
-    client = get_supabase()
+    client = get_auth_client()
 
     try:
         response = client.auth.sign_up({
@@ -77,7 +103,7 @@ def sign_in_user(email: str, password: str) -> dict:
     Raises:
         ValueError: If login fails (e.g., invalid credentials)
     """
-    client = get_supabase()
+    client = get_auth_client()
 
     try:
         response = client.auth.sign_in_with_password({
@@ -125,7 +151,7 @@ async def get_current_user_id(
         HTTPException: If token is invalid or expired
     """
     token = credentials.credentials
-    client = get_supabase()
+    client = get_auth_client()
 
     try:
         # Verify token with Supabase Auth
