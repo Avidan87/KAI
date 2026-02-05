@@ -2,9 +2,9 @@
 FastAPI server for KAI
 
 Endpoints (v1):
-Auth:
-- POST /api/v1/auth/signup              # Sign up new user, get JWT token
-- POST /api/v1/auth/login               # Login existing user, get JWT token
+Auth (Supabase Auth with password):
+- POST /api/v1/auth/signup              # Sign up with email + password, get JWT token
+- POST /api/v1/auth/login               # Login with email + password, get JWT token
 
 Chat:
 - POST /api/v1/chat                     # Chat with KAI (nutrition questions, progress, feedback)
@@ -47,7 +47,7 @@ from kai.models.agent_models import (
 )
 from kai.agents.chat_agent import get_chat_agent
 from kai.orchestrator import handle_user_request
-from kai.auth import create_access_token, get_current_user_id
+from kai.auth import sign_up_user, sign_in_user, get_current_user_id
 from kai.database import (
     initialize_database,
     get_user,
@@ -109,18 +109,19 @@ async def health_check():
 @app.post("/api/v1/auth/signup")
 async def signup(
     email: str = Form(...),
+    password: str = Form(..., min_length=6),
     name: str = Form(...),
     gender: str = Form(...),
     age: int = Form(...)
 ):
     """
-    Sign up new user and return JWT token.
+    Sign up new user with password and return JWT token.
 
     All fields are required for signup. Health profile (weight, height, activity, goals)
     can be completed later via /api/v1/users/health-profile endpoint.
-    """
-    user_id = str(uuid.uuid4())  # Generate UUID as user_id
 
+    Password must be at least 6 characters.
+    """
     # Validate name
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="Name is required and cannot be empty")
@@ -135,7 +136,11 @@ async def signup(
         raise HTTPException(status_code=400, detail="Age must be between 13 and 120")
 
     try:
-        # Create user in database
+        # 1. Create user in Supabase Auth (handles password hashing)
+        auth_result = sign_up_user(email=email, password=password)
+        user_id = auth_result["user_id"]
+
+        # 2. Create user profile in our database
         user = await create_user(
             user_id=user_id,
             email=email,
@@ -143,12 +148,10 @@ async def signup(
             gender=gender_normalized,
             age=age
         )
-        
-        # Create JWT token with user_id
-        access_token = create_access_token(data={"sub": user_id})
-        
+
         return {
-            "access_token": access_token,
+            "access_token": auth_result["access_token"],
+            "refresh_token": auth_result["refresh_token"],
             "token_type": "bearer",
             "user_id": user_id,
             "user": user
@@ -158,18 +161,27 @@ async def signup(
 
 
 @app.post("/api/v1/auth/login")
-async def login(email: str = Form(...)):
-    """Login existing user and return JWT token"""
-    user = await get_user_by_email(email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    access_token = create_access_token(data={"sub": user["user_id"]})
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user_id": user["user_id"]
-    }
+async def login(
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    """
+    Login existing user with password and return JWT token.
+
+    Returns access_token and refresh_token for authenticated sessions.
+    """
+    try:
+        # Authenticate with Supabase Auth
+        auth_result = sign_in_user(email=email, password=password)
+
+        return {
+            "access_token": auth_result["access_token"],
+            "refresh_token": auth_result["refresh_token"],
+            "token_type": "bearer",
+            "user_id": auth_result["user_id"]
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
 
 # ============================================================================

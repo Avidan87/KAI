@@ -1,8 +1,7 @@
 """
-JWT Authentication Module for KAI
+Authentication Module for KAI - Supabase Auth Integration
 """
 
-from .jwt_auth import create_access_token, get_current_user_id
+from .jwt_auth import sign_up_user, sign_in_user, get_current_user_id
 
-__all__ = ["create_access_token", "get_current_user_id"]
-
+__all__ = ["sign_up_user", "sign_in_user", "get_current_user_id"]

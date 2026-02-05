@@ -1,53 +1,151 @@
 """
-JWT Authentication for KAI
+JWT Authentication for KAI - Supabase Auth Integration
+
+Uses Supabase Auth for secure password-based authentication.
+Tokens issued by Supabase are verified server-side.
 """
-from datetime import datetime, timedelta
+import logging
 from typing import Optional
-from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import os
 
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-min-32-chars")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30 * 24 * 60  # 30 days
+from kai.database.db_setup import get_supabase
+
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create JWT token with user_id in payload"""
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+def sign_up_user(email: str, password: str) -> dict:
+    """
+    Sign up a new user with Supabase Auth.
+
+    Args:
+        email: User's email address
+        password: User's password (min 6 characters)
+
+    Returns:
+        dict: Contains user info and session tokens
+
+    Raises:
+        ValueError: If signup fails (e.g., email already exists, weak password)
+    """
+    client = get_supabase()
+
+    try:
+        response = client.auth.sign_up({
+            "email": email,
+            "password": password
+        })
+
+        if response.user is None:
+            raise ValueError("Signup failed - no user returned")
+
+        logger.info(f"✓ User signed up: {email}")
+
+        return {
+            "user_id": response.user.id,
+            "email": response.user.email,
+            "access_token": response.session.access_token if response.session else None,
+            "refresh_token": response.session.refresh_token if response.session else None,
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"✗ Signup failed for {email}: {error_msg}")
+
+        # Parse common Supabase Auth errors
+        if "already registered" in error_msg.lower() or "already exists" in error_msg.lower():
+            raise ValueError("Email already registered")
+        elif "password" in error_msg.lower():
+            raise ValueError("Password must be at least 6 characters")
+        else:
+            raise ValueError(f"Signup failed: {error_msg}")
+
+
+def sign_in_user(email: str, password: str) -> dict:
+    """
+    Sign in an existing user with Supabase Auth.
+
+    Args:
+        email: User's email address
+        password: User's password
+
+    Returns:
+        dict: Contains user info and session tokens
+
+    Raises:
+        ValueError: If login fails (e.g., invalid credentials)
+    """
+    client = get_supabase()
+
+    try:
+        response = client.auth.sign_in_with_password({
+            "email": email,
+            "password": password
+        })
+
+        if response.user is None:
+            raise ValueError("Login failed - invalid credentials")
+
+        logger.info(f"✓ User signed in: {email}")
+
+        return {
+            "user_id": response.user.id,
+            "email": response.user.email,
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"✗ Login failed for {email}: {error_msg}")
+
+        if "invalid" in error_msg.lower() or "credentials" in error_msg.lower():
+            raise ValueError("Invalid email or password")
+        else:
+            raise ValueError(f"Login failed: {error_msg}")
 
 
 async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> str:
-    """Extract user_id from JWT token"""
+    """
+    Extract and verify user_id from Supabase JWT token.
+
+    Verifies the token with Supabase Auth server to ensure it's valid.
+
+    Args:
+        credentials: Bearer token from Authorization header
+
+    Returns:
+        str: The authenticated user's ID
+
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
     token = credentials.credentials
+    client = get_supabase()
+
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")  # 'sub' is standard JWT claim for subject/user_id
-        if user_id is None:
+        # Verify token with Supabase Auth
+        response = client.auth.get_user(token)
+
+        if response.user is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials - no user_id in token",
+                detail="Invalid or expired token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return user_id
-    except JWTError as e:
+
+        return response.user.id
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token verification failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication credentials - {str(e)}",
+            detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
