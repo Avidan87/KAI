@@ -122,6 +122,9 @@ async def signup(
 
     Password must be at least 6 characters.
     """
+    # Clean and validate email
+    email_clean = email.strip().lower()
+
     # Validate name
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="Name is required and cannot be empty")
@@ -137,7 +140,7 @@ async def signup(
 
     try:
         # 1. Create user in Supabase Auth (handles password hashing)
-        auth_result = sign_up_user(email=email, password=password)
+        auth_result = sign_up_user(email=email_clean, password=password)
         user_id = auth_result["user_id"]
 
         # 2. Create user profile in our database
