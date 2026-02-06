@@ -13,16 +13,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from kai.agents.vision_agent import VisionAgent
 from kai.agents.knowledge_agent import KnowledgeAgent
-from kai.models.agent_models import VisionResult, KnowledgeResult
+from kai.models.agent_models import VisionResult, KnowledgeResult, DetectedFood
 from kai.database import (
     create_user,
     get_user,
     log_meal,
 )
 from kai.jobs import calculate_and_update_user_stats
+from kai.food_registry import get_food_registry
 
 
 logger = logging.getLogger(__name__)
+
+
+# Confidence threshold - warn user if detection confidence is below this
+LOW_CONFIDENCE_THRESHOLD = 0.5
 
 
 VALID_MEAL_TYPES = {"breakfast", "lunch", "dinner", "snack"}
@@ -88,14 +93,62 @@ def _get_agent(agent_type: str):
     return _agent_instances[agent_type]
 
 
-def _extract_foods_from_vision(vision_result: VisionResult) -> Tuple[List[str], List[float]]:
-    """Extract food names and estimated grams from VisionResult."""
+def _extract_foods_from_vision(
+    vision_result: VisionResult
+) -> Tuple[List[str], List[float], List[float]]:
+    """
+    Extract food names, portions, and confidence scores from VisionResult.
+
+    Uses food-specific typical portions from database instead of generic 200g fallback.
+    Validates portions against reasonable ranges per food type.
+
+    Returns:
+        Tuple of (names, grams, confidences)
+    """
     names: List[str] = []
     grams: List[float] = []
+    confidences: List[float] = []
+
+    registry = get_food_registry()
+
     for item in vision_result.detected_foods:
         names.append(item.name)
-        grams.append(float(item.estimated_grams) if item.estimated_grams and item.estimated_grams > 0 else 200.0)
-    return names, grams
+        confidences.append(item.confidence)
+
+        # Get food-specific portion info from registry
+        food_info = registry.get_food_info(item.name)
+        typical_g = food_info.get('typical_portion_g', 150) if food_info else 150
+        min_g = food_info.get('min_reasonable_g', 30) if food_info else 30
+        max_g = food_info.get('max_reasonable_g', 500) if food_info else 500
+
+        # Check if Vision provided a valid portion estimate
+        if item.estimated_grams and item.estimated_grams > 0:
+            portion = float(item.estimated_grams)
+
+            # Validate against reasonable range
+            if portion < min_g:
+                logger.warning(
+                    "⚠️ Portion too small for %s: %.0fg < min %.0fg, using min",
+                    item.name, portion, min_g
+                )
+                portion = min_g
+            elif portion > max_g:
+                logger.warning(
+                    "⚠️ Portion too large for %s: %.0fg > max %.0fg, capping",
+                    item.name, portion, max_g
+                )
+                portion = max_g
+
+            grams.append(portion)
+        else:
+            # Fallback to food-specific typical portion (NOT generic 200g)
+            logger.warning(
+                "⚠️ No portion estimate for %s, using typical: %.0fg",
+                item.name, typical_g
+            )
+            grams.append(float(typical_g))
+
+    return names, grams, confidences
 
 
 async def handle_user_request(
@@ -137,17 +190,36 @@ async def handle_user_request(
     )
     logger.info(f"   → Detected: {len(vision_result.detected_foods)} foods")
 
-    # Step 2: Knowledge - Retrieve nutrition data
-    food_names, portions_grams = _extract_foods_from_vision(vision_result)
+    # Step 2: Extract foods with validation
+    food_names, portions_grams, confidences = _extract_foods_from_vision(vision_result)
+
+    # Log confidence warnings for uncertain detections
+    low_confidence_foods = [
+        (name, conf) for name, conf in zip(food_names, confidences)
+        if conf < LOW_CONFIDENCE_THRESHOLD
+    ]
+    if low_confidence_foods:
+        for name, conf in low_confidence_foods:
+            logger.warning(
+                "⚠️ Low confidence detection: %s (%.0f%%) - may be inaccurate",
+                name, conf * 100
+            )
+
+    # Step 3: Knowledge - Retrieve nutrition data
     knowledge = _get_agent("knowledge")
 
     knowledge_result: KnowledgeResult = await asyncio.wait_for(
-        knowledge.retrieve_nutrition(food_names=food_names, portions_grams=portions_grams),
+        knowledge.retrieve_nutrition(
+            food_names=food_names,
+            portions_grams=portions_grams,
+            vision_confidences=confidences,  # Pass confidence to Knowledge Agent
+        ),
         timeout=45.0,
     )
     logger.info(
-        f"   → Nutrition: {knowledge_result.total_calories:.0f} cal, "
-        f"{knowledge_result.total_protein:.1f}g protein"
+        "   → Nutrition: %.0f cal, %.1fg protein",
+        knowledge_result.total_calories,
+        knowledge_result.total_protein
     )
 
     # Step 3: Save meal to database

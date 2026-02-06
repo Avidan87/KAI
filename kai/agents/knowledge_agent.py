@@ -166,7 +166,8 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
     async def retrieve_nutrition(
         self,
         food_names: List[str],
-        portions_grams: List[float]
+        portions_grams: List[float],
+        vision_confidences: Optional[List[float]] = None
     ) -> KnowledgeResult:
         """
         Retrieve nutrition data for a list of foods with portions.
@@ -174,17 +175,23 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
         Args:
             food_names: List of Nigerian food names
             portions_grams: Corresponding portion sizes in grams
+            vision_confidences: Optional confidence scores from Vision Agent
 
         Returns:
             KnowledgeResult with nutrition data and totals
         """
         try:
-            logger.info(f"🔍 Retrieving nutrition for {len(food_names)} foods")
+            logger.info("🔍 Retrieving nutrition for %d foods", len(food_names))
+
+            # Default confidences to 1.0 if not provided
+            if vision_confidences is None:
+                vision_confidences = [1.0] * len(food_names)
 
             # Call the tool function directly (SDK pattern)
             result_json = await self._tool_search_nigerian_foods(
                 food_names=food_names,
-                portions_grams=portions_grams
+                portions_grams=portions_grams,
+                vision_confidences=vision_confidences
             )
 
             # Parse tool result
@@ -209,7 +216,8 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
     async def _tool_search_nigerian_foods(
         self,
         food_names: List[str],
-        portions_grams: List[float]
+        portions_grams: List[float],
+        vision_confidences: Optional[List[float]] = None
     ) -> str:
         """
         Tool function for searching Nigerian food nutrition data.
@@ -219,14 +227,19 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
         Args:
             food_names: List of food names to search
             portions_grams: Portion sizes in grams
+            vision_confidences: Confidence scores from Vision Agent
 
         Returns:
             JSON string with nutrition results
         """
-        logger.info(f"🔧 Tool: search_nigerian_foods ({len(food_names)} foods)")
+        logger.info("🔧 Tool: search_nigerian_foods (%d foods)", len(food_names))
 
         if len(food_names) != len(portions_grams):
             raise ValueError("food_names and portions_grams must have same length")
+
+        # Default confidences if not provided
+        if vision_confidences is None:
+            vision_confidences = [1.0] * len(food_names)
 
         foods_data = []
         # Initialize ALL 16 NUTRIENT totals
@@ -250,20 +263,24 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
         total_vitamin_b12 = 0.0
         total_folate = 0.0
 
-        async def search_one(food_name: str, portion_g: float):
-            logger.info(f"   Searching: {food_name} ({portion_g}g)")
+        async def search_one(food_name: str, portion_g: float, vision_conf: float):
+            logger.info("   Searching: %s (%.0fg, conf=%.0f%%)",
+                        food_name, portion_g, vision_conf * 100)
             # Run sync DB search in a worker thread
             results = await asyncio.to_thread(
                 self.vector_db.search,
                 food_name,
                 1
             )
-            return (food_name, portion_g, results)
+            return (food_name, portion_g, vision_conf, results)
 
-        tasks = [search_one(fn, pg) for fn, pg in zip(food_names, portions_grams)]
+        tasks = [
+            search_one(fn, pg, vc)
+            for fn, pg, vc in zip(food_names, portions_grams, vision_confidences)
+        ]
         search_results = await asyncio.gather(*tasks, return_exceptions=False)
 
-        for food_name, portion_g, results in search_results:
+        for food_name, portion_g, vision_conf, results in search_results:
             if not results:
                 logger.warning(f"   ✗ No match found for: {food_name}")
                 continue
@@ -335,6 +352,7 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
                 "dietary_flags": dietary_flags,
                 "price_tier": metadata.get("price_tier", "mid"),
                 "similarity_score": match.get("similarity", 1.0),
+                "vision_confidence": vision_conf,  # Confidence from Vision Agent
                 # Include portion limits from v2 database for validation
                 "typical_portion_g": metadata.get("typical_portion_g", 150),
                 "min_reasonable_g": metadata.get("min_reasonable_g", 50),
@@ -344,8 +362,10 @@ Use the get_foods_by_nutrient tool to find foods high in specific nutrients."""
             foods_data.append(food_data)
 
             logger.info(
-                f"   ✓ Matched: {food_data['name']} "
-                f"(similarity: {food_data['similarity_score']:.2f})"
+                "   ✓ Matched: %s (similarity: %.2f, vision_conf: %.0f%%)",
+                food_data['name'],
+                food_data['similarity_score'],
+                vision_conf * 100
             )
 
         # Build result with ALL 16 NUTRIENTS

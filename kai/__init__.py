@@ -13,11 +13,21 @@ Orchestrator: Coordinates the multi-agent workflow
 """
 
 from kai.orchestrator import handle_user_request, handle_user_request_sync
+from kai.food_registry import (
+    get_food_registry,
+    get_canonical_food_name,
+    get_all_food_names,
+    is_known_food,
+)
 
 __version__ = "0.3.0"
 
 __all__ = [
     "handle_user_request",
     "handle_user_request_sync",
+    "get_food_registry",
+    "get_canonical_food_name",
+    "get_all_food_names",
+    "is_known_food",
     "__version__",
 ]

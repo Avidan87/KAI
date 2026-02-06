@@ -21,6 +21,7 @@ import os
 from kai.models import VisionResult, DetectedFood
 from kai.mcp_servers.depth_estimation_client import get_portion_estimate, get_portions_batch
 from kai.agents.sam_segmentation import SAMFoodSegmenter
+from kai.food_registry import get_food_registry, get_canonical_food_name
 import numpy as np
 from PIL import Image
 
@@ -70,13 +71,12 @@ class VisionAgent:
         self.model = "gpt-4o"  # Vision-capable model
         self.max_image_size = 2048  # Max dimension for processing
 
-        # Nigerian food knowledge (from our enriched database)
-        self.known_foods = [
-            "Jollof Rice", "Pounded Yam", "Fufu", "Suya", "Moi Moi",
-            "Pepper Soup", "Akara", "Efo Riro", "Ewa Agoyin", "Okra Soup",
-            "Ogbono Soup", "Rice and Stew", "Beans and Stew", "Eba",
-            "Fried Plantain", "Egusi Soup", "Amala", "Fried Rice"
-        ]
+        # Load canonical food names from the knowledge base registry
+        # This ensures Vision outputs match exactly what Knowledge Agent expects
+        self.food_registry = get_food_registry()
+        self.known_foods = self.food_registry.get_all_names()
+
+        logger.info(f"✓ Vision Agent loaded {len(self.known_foods)} canonical food names from registry")
 
         # Setup agent with vision tools
         self._setup_agent()
@@ -125,10 +125,15 @@ Use the analyze_nigerian_food_image tool to process images and return structured
         logger.info("✓ Vision Agent initialized with @function_tool decorator")
 
     def _create_analyze_food_tool(self):
-        """Create the analyze_nigerian_food_image tool with @function_tool decorator."""
-        client = self.client
-        model = self.model
-        known_foods = self.known_foods
+        """
+        Create the analyze_nigerian_food_image tool with @function_tool decorator.
+
+        NOTE: This tool is created for SDK compatibility but the actual analysis
+        is done via _tool_analyze_nigerian_food_image which uses _build_detection_prompt.
+        This ensures we use the latest prompt with all food names from the registry.
+        """
+        # Capture self for use in the tool function
+        vision_agent = self
 
         @function_tool
         async def analyze_nigerian_food_image(
@@ -141,109 +146,12 @@ Use the analyze_nigerian_food_image tool to process images and return structured
             Returns detailed information about detected dishes including names, portions,
             ingredients, cooking methods, and confidence scores.
             """
-            logger.info(f"🔧 Tool: analyze_nigerian_food_image (meal_type={meal_type})")
-
-            # Build analysis prompt
-            meal_context = f"This is a {meal_type} meal. " if meal_type else ""
-
-            prompt = f"""You are an expert Nigerian food recognition AI specialized in identifying Nigerian dishes.
-
-{meal_context}Analyze this meal image and identify ALL Nigerian foods present.
-
-**Known Nigerian Foods to Look For:**
-{', '.join(known_foods[:20])}... and 30+ more dishes
-
-**Your Task:**
-1. Identify each distinct Nigerian food in the image
-2. Estimate portion size in grams (typical Nigerian portions)
-3. Identify visible ingredients and cooking method
-4. Assign confidence score (0.0-1.0) for each food
-5. Note the overall meal context
-6. Flag if you need clarification from the user
-
-**Typical Portion Reference:**
-- 1 plate of rice/stew = ~250g
-- 1 wrap of fufu/eba = ~200g
-- 1 piece of meat = ~80-100g
-- 1 bowl of soup = ~200-300g
-- Small side dishes = ~50-100g
-
-**Return ONLY valid JSON (no markdown):**
-{{
-  "detected_foods": [
-    {{
-      "name": "Food name in English",
-      "nigerian_name": "Nigerian/local name if different",
-      "confidence": 0.0-1.0,
-      "estimated_portion": "descriptive size",
-      "estimated_grams": number,
-      "visible_ingredients": ["ingredient1", "ingredient2"],
-      "cooking_method": "how it appears to be cooked"
-    }}
-  ],
-  "meal_context": "Overall description of the meal",
-  "cooking_method": "Primary cooking method observed",
-  "overall_confidence": 0.0-1.0,
-  "needs_clarification": true/false,
-  "clarification_questions": ["question1", "question2"]
-}}
-
-**Important Detection Rules:**
-- If you see rice with red/orange sauce → likely "Jollof Rice" or "Fried Rice"
-- White pounded starchy food → "Pounded Yam", "Fufu", or "Eba"
-- Dark green leafy soup → "Efo Riro", "Edikang Ikong", or vegetable soup
-- Thick draw soup → "Ogbono Soup" or "Okra Soup"
-- Fried bean cakes → "Akara"
-- Grilled spicy meat on stick → "Suya"
-- Yellow/brown fried plantain slices → "Fried Plantain" (Dodo)
-
-**Confidence Guidelines:**
-- 0.9-1.0: Very certain (clear view, familiar dish)
-- 0.7-0.9: Confident (good visibility, recognizable)
-- 0.5-0.7: Moderate (some uncertainty, partial view)
-- 0.3-0.5: Low (unclear, could be multiple dishes)
-- <0.3: Very uncertain (needs clarification)
-
-Be specific about Nigerian dishes, not generic descriptions!"""
-
-            # Call GPT-4o Vision API
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": f"Analyze this Nigerian meal image. {user_description or ''}"
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.2,
-                max_tokens=1500
+            # Delegate to the main tool function which uses the updated prompt
+            return await vision_agent._tool_analyze_nigerian_food_image(
+                image_base64=image_base64,
+                user_description=user_description,
+                meal_type=meal_type
             )
-
-            # Log token usage
-            usage = response.usage
-            logger.info(
-                f"Vision Agent: {usage.total_tokens} tokens "
-                f"(~${usage.total_tokens * 2.5 / 1000:.4f})"
-            )
-
-            return response.choices[0].message.content
 
         return analyze_nigerian_food_image
 
@@ -538,33 +446,45 @@ Be specific about Nigerian dishes, not generic descriptions!"""
         """
         meal_context = f"This is a {meal_type} meal. " if meal_type else ""
 
+        # Get the full categorized food list from registry
+        food_list_by_category = self.food_registry.get_vision_agent_food_list()
+
         return f"""You are an expert Nigerian food recognition AI specialized in identifying Nigerian dishes.
 
 {meal_context}Analyze this meal image and identify ALL Nigerian foods present.
 
-**Known Nigerian Foods to Look For:**
-{', '.join(self.known_foods[:20])}... and 30+ more dishes
+**CRITICAL RULES:**
+1. You MUST use the EXACT food names from the list below - no paraphrasing
+2. Pay CLOSE ATTENTION to cooking method (boiled vs fried vs grilled)
+   - BOILED foods: pale/white color, soft moist texture, no crispy edges
+   - FRIED foods: golden/brown color, oily sheen, crispy edges
+   - GRILLED foods: char marks, smoky appearance, no oil coating
+3. The cooking method changes the food name entirely (e.g., "Boiled Yam" ≠ "Fried Yam")
+
+**AUTHORIZED FOOD NAMES (use these EXACT names):**
+{food_list_by_category}
 
 **Your Task:**
-1. Identify each distinct Nigerian food in the image
-2. Estimate portion size in grams (typical Nigerian portions)
-3. Identify visible ingredients and cooking method
-4. Assign confidence score (0.0-1.0) for each food
-5. Note the overall meal context
+1. Identify each distinct food in the image
+2. Use the EXACT name from the authorized list above (e.g., "Fried Plantain (Ripe)" not "Fried Plantain")
+3. Estimate portion size in grams (typical Nigerian portions)
+4. Identify visible ingredients and cooking method
+5. Assign confidence score (0.0-1.0) for each food
 6. Flag if you need clarification from the user
 
 **Typical Portion Reference:**
 - 1 plate of rice/stew = ~250g
-- 1 wrap of fufu/eba = ~200g
-- 1 piece of meat = ~80-100g
+- 1 wrap of fufu/eba = ~200-300g
+- 1 piece of meat = ~80-150g
 - 1 bowl of soup = ~200-300g
 - Small side dishes = ~50-100g
+- 1 egg = ~50g
 
 **Return ONLY valid JSON (no markdown):**
 {{
   "detected_foods": [
     {{
-      "name": "Food name in English",
+      "name": "EXACT name from authorized list",
       "nigerian_name": "Nigerian/local name if different",
       "confidence": 0.0-1.0,
       "estimated_portion": "descriptive size",
@@ -580,14 +500,55 @@ Be specific about Nigerian dishes, not generic descriptions!"""
   "clarification_questions": ["question1", "question2"]
 }}
 
-**Important Detection Rules:**
-- If you see rice with red/orange sauce → likely "Jollof Rice" or "Fried Rice"
-- White pounded starchy food → "Pounded Yam", "Fufu", or "Eba"
-- Dark green leafy soup → "Efo Riro", "Edikang Ikong", or vegetable soup
-- Thick draw soup → "Ogbono Soup" or "Okra Soup"
-- Fried bean cakes → "Akara"
+**Food Identification Guide (VISUAL CUES):**
+
+**YAM - Pay close attention to cooking method:**
+- White/cream colored yam chunks, NO golden/brown edges, soft moist texture → "Boiled Yam"
+- Golden/brown crispy edges, oily surface, darker color → "Fried Yam"
+- CRITICAL: Boiled yam is pale/white, fried yam has golden-brown crispy exterior
+
+**PLANTAIN - Check color and texture carefully:**
+- Yellow/brown slices with crispy golden edges, oily → "Fried Plantain (Ripe)"
+- Soft yellow/orange chunks, no crispy edges, moist → "Boiled Plantain (Ripe)"
+- Pale/greenish soft chunks → "Boiled Plantain (Unripe)"
+- Charred black spots, smoky appearance → "Boli (Roasted Plantain)"
+
+**RICE:**
+- Rice with red/tomato sauce → "Jollof Rice"
+- Rice with vegetables (carrots, peas, green beans) → "Fried Rice"
+- Plain white rice, no color → "White Rice (Boiled)"
+- Rice cooked with coconut, slightly brown → "Coconut Rice"
+
+**SWALLOWS (starchy ball/mound eaten with soup):**
+- White smooth pounded texture → "Pounded Yam" or "Fufu (Cassava)"
+- Yellow/cream cassava-based → "Eba (Garri)"
+- Brown/dark yam flour based → "Amala"
+- White semolina-based → "Semovita"
+- White rice-based (Northern) → "Tuwo Shinkafa"
+
+**EGGS:**
+- Scrambled eggs mixed with tomatoes, peppers, onions → "Egg Sauce (Nigerian Style)"
+- Flat fried eggs with crispy edges → "Fried Eggs"
+- Whole eggs with solid yolk, no browning → "Hard Boiled Eggs"
+
+**SOUPS:**
+- Dark green leafy soup → "Efo Riro" or "Edikang Ikong Soup"
+- Thick orange/brown soup with melon seeds visible → "Egusi Soup"
+- Slimy/draw soup texture → "Ogbono Soup" or "Okro Soup"
+- Red palm oil based with vegetables → "Banga Soup"
+- Bitter leaf visible, greenish → "Bitterleaf Soup (Ofe Onugbu)"
+
+**PROTEINS:**
+- Fried bean balls (round, golden) → "Akara"
+- Steamed bean pudding (wrapped in leaves/foil) → "Moi Moi"
 - Grilled spicy meat on stick → "Suya"
-- Yellow/brown fried plantain slices → "Fried Plantain" (Dodo)
+- Stewed beef chunks in sauce → "Beef (Stewed)"
+- Stewed goat meat → "Goat Meat (Stewed)"
+- Fried fish with crispy coating → "Fried Fish" or "Fried Catfish"
+- Grilled fish, no coating → "Grilled Tilapia"
+- Fried chicken with golden coating → "Fried Chicken"
+- Grilled chicken, no coating → "Grilled Chicken Breast"
+- Brown beans → "Brown Beans (Boiled)"
 
 **Confidence Guidelines:**
 - 0.9-1.0: Very certain (clear view, familiar dish)
@@ -596,11 +557,13 @@ Be specific about Nigerian dishes, not generic descriptions!"""
 - 0.3-0.5: Low (unclear, could be multiple dishes)
 - <0.3: Very uncertain (needs clarification)
 
-Be specific about Nigerian dishes, not generic descriptions!"""
+**IMPORTANT:** If you cannot find an exact match in the authorized list, use the closest match and set confidence lower. Do NOT invent new food names."""
 
     def _parse_detection_result(self, result_dict: Dict[str, Any], depth_estimation_used: bool = False) -> VisionResult:
         """
         Parse JSON result into VisionResult model.
+
+        Validates and normalizes food names to match the knowledge base exactly.
 
         Args:
             result_dict: Parsed JSON from GPT-4o
@@ -612,8 +575,22 @@ Be specific about Nigerian dishes, not generic descriptions!"""
         detected_foods = []
 
         for food_data in result_dict.get("detected_foods", []):
+            # Get the raw name from Vision
+            raw_name = food_data.get("name", "Unknown Food")
+
+            # Normalize to canonical name from the registry
+            # This ensures the name matches exactly what's in the knowledge base
+            canonical_name = get_canonical_food_name(raw_name)
+
+            if canonical_name != raw_name:
+                logger.info(f"📝 Normalized food name: '{raw_name}' → '{canonical_name}'")
+
+            # Warn if the food is not in our database
+            if not self.food_registry.is_known_food(raw_name):
+                logger.warning(f"⚠️ Unknown food detected: '{raw_name}' (not in knowledge base)")
+
             detected_food = DetectedFood(
-                name=food_data.get("name", "Unknown Food"),
+                name=canonical_name,  # Use normalized name
                 nigerian_name=food_data.get("nigerian_name"),
                 confidence=food_data.get("confidence", 0.5),
                 estimated_portion=food_data.get("estimated_portion", "Unknown"),
